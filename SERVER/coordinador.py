@@ -113,6 +113,8 @@ def load_persistent_nodes():
         print(f"[HTTP] Error cargando nodos persistentes: {e}")
 
 
+
+
 def _broadcast_event(event_obj, exclude_node=None):
     """
     Envía un JSON `event_obj` a todas las conexiones activas TCP.
@@ -180,6 +182,12 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
 
                 if existing:
                     node_id = existing
+                    # actualizar last_seen ya que el cliente realizó discovery
+                    try:
+                        nodos_registrados[node_id]['last_seen'] = time.time()
+                        nodos_registrados[node_id]['status'] = 'online'
+                    except Exception:
+                        pass
                 else:
                     global next_node_number
                     node_id = f"nodo{next_node_number}"
@@ -194,7 +202,14 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
             if query and 'all=1' in query:
                 include_all = True
 
+            client_ip = self.client_address[0]
             with lock_nodos:
+                # si el cliente que pide la lista está registrado, actualizar su last_seen
+                for nid, info in nodos_registrados.items():
+                    if info.get('ip') == client_ip:
+                        nodos_registrados[nid]['last_seen'] = time.time()
+                        nodos_registrados[nid]['status'] = 'online'
+
                 nodes_list = []
                 for nid, info in nodos_registrados.items():
                     status = info.get('status', 'unknown')
@@ -223,7 +238,7 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({'status': 'ERROR', 'message': 'missing node_id'}, status=400)
                 return
             with lock_nodos:
-                nodos_registrados[node_id] = {'ip': client_ip, 'port': COORD_PORT, 'capacity': capacity, 'status': 'online', 'used': 0}
+                nodos_registrados[node_id] = {'ip': client_ip, 'port': COORD_PORT, 'capacity': capacity, 'status': 'online', 'used': 0, 'last_seen': time.time()}
             save_persistent_nodes()
             print(f"[HTTP] Nodo registrado via HTTP: {node_id} -> {client_ip} cap={capacity}")
 
@@ -248,6 +263,7 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
             with lock_nodos:
                 if node_id in nodos_registrados:
                     nodos_registrados[node_id]['status'] = 'offline'
+                    nodos_registrados[node_id]['last_seen'] = time.time()
                 # cerrar conexión TCP activa si existe
                 if node_id in conexiones_activas:
                     try:
@@ -320,6 +336,14 @@ def monitor_connections(interval=10):
                         print(f"[MONITOR] No PONG de {nid} en {now-lp:.1f}s (> {timeout}s). Marcando offline.")
                         to_remove.append(nid)
 
+            # 2b) Detectar nodos registrados vía HTTP (sin socket TCP) que llevan mucho sin actividad
+            for nid, info in list(nodos_registrados.items()):
+                if info.get('status') == 'online' and nid not in conexiones_activas:
+                    last = info.get('last_seen', 0)
+                    if last and (now - last > timeout):
+                        print(f"[MONITOR] Nodo {nid} registrado vía HTTP sin actividad en {now-last:.1f}s (> {timeout}s). Marcando offline.")
+                        to_remove.append(nid)
+
             # Unir removals únicos
             to_remove = list(dict.fromkeys(to_remove))
 
@@ -337,6 +361,7 @@ def monitor_connections(interval=10):
 
                 if nid in nodos_registrados:
                     nodos_registrados[nid]['status'] = 'offline'
+                    nodos_registrados[nid]['last_seen'] = time.time()
                     print(f"[MONITOR] Nodo marcado como offline: {nid}")
                     # limpiar last_pong
                     try:
@@ -379,6 +404,12 @@ def manejar_nodo(conn, addr):
                 print(f"[TCP] Error al decodificar JSON: {e}")
                 continue
 
+            # Actualizar last_seen para clientes que ya se han identificado
+            if node_id_actual:
+                with lock_nodos:
+                    if node_id_actual in nodos_registrados:
+                        nodos_registrados[node_id_actual]['last_seen'] = time.time()
+
             msg_type = msg.get("type")
 
             if msg_type == "REGISTER_NODE":
@@ -391,7 +422,8 @@ def manejar_nodo(conn, addr):
                         "ip": addr[0],
                         "port": listen_port,
                         "status": "online",
-                        "used": 0
+                        "used": 0,
+                        "last_seen": time.time()
                     }
                     conexiones_activas[node_id_actual] = conn
                     # Registrar last_pong al momento del registro

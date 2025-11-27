@@ -217,6 +217,8 @@
         // --- ESTADO DE LA APLICACIÓN ---
         let isConnected = false;
         let clientId = null;
+        let apiBaseGlobal = null; // guarda la base API usada para discover/register
+        let pollInterval = null;
         const totalNodes = 4; // Simulación
         
         // Mock data para simular backend
@@ -296,6 +298,7 @@
                     // Conexión exitosa
                     isConnected = true;
                     clientId = assignedId;
+                    apiBaseGlobal = apiBase;
                     idDisplay.innerText = clientId;
                     idDisplay.classList.replace('text-blue-400', 'text-green-400');
 
@@ -330,8 +333,8 @@
             } else {
                     // Antes de limpiar la UI, avisar al servidor que nos desconectamos
                     try {
-                        if (clientId) {
-                            await fetch(apiBase + '/disconnect', {
+                        if (clientId && apiBaseGlobal) {
+                            await fetch(apiBaseGlobal + '/disconnect', {
                                 method: 'POST', headers: {'Content-Type':'application/json'},
                                 body: JSON.stringify({ node_id: clientId })
                             });
@@ -344,6 +347,8 @@
                     // DESCONECTANDO
                     isConnected = false;
                     clientId = null;
+                    apiBaseGlobal = null;
+                    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
                 
                 // Desbloquear inputs
                 capacityInput.disabled = false;
@@ -658,6 +663,27 @@
 
         // Iniciar
         init();
+
+        // Intentar notificar desconexión al coordinador cuando se cierra/navega fuera la pestaña
+        window.addEventListener('beforeunload', function (e) {
+            try {
+                if (clientId && apiBaseGlobal && navigator.sendBeacon) {
+                    const url = apiBaseGlobal + '/disconnect';
+                    const payload = JSON.stringify({ node_id: clientId });
+                    const blob = new Blob([payload], { type: 'application/json' });
+                    navigator.sendBeacon(url, blob);
+                } else if (clientId && apiBaseGlobal) {
+                    // Fallback: intentar fetch con keepalive (no bloqueará unload en algunos navegadores)
+                    try {
+                        fetch(apiBaseGlobal + '/disconnect', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ node_id: clientId }), keepalive: true });
+                    } catch (err) {
+                        console.warn('No se pudo notificar desconexión en beforeunload:', err);
+                    }
+                }
+            } catch (err) {
+                console.warn('Error en beforeunload disconnect handler:', err);
+            }
+        });
 
     </script>
 </body>
