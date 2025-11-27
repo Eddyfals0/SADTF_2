@@ -1,0 +1,9 @@
+# Requirements for SADTF_2
+# Esta aplicación usa solamente la biblioteca estándar de Python (sockets, threading, http.server, json).
+# Si añades dependencias externas, añádelas en este archivo.
+
+# Versión mínima de Python recomendada
+python>=3.10
+
+# Dependencias externas (ninguna por ahora)
+# requests==2.31.0   # ejemplo: descomenta si usas requests

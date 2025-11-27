@@ -181,6 +181,18 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                 nodos_registrados[node_id] = {'ip': client_ip, 'port': COORD_PORT, 'capacity': capacity, 'status': 'online', 'used': 0}
             save_persistent_nodes()
             print(f"[HTTP] Nodo registrado via HTTP: {node_id} -> {client_ip} cap={capacity}")
+
+            # Notificar a nodos TCP activos que un nuevo nodo se registró via API
+            evento = {
+                'type': 'NODE_CONNECTED',
+                'node_id': node_id,
+                'ip': client_ip,
+                'port': COORD_PORT,
+                'capacity': capacity
+            }
+            print(f"[HTTP][BROADCAST] Notificando conexión de {node_id} a {len(conexiones_activas)} nodos TCP activos")
+            _broadcast_event(evento, exclude_node=None)
+
             self._send_json({'status': 'OK', 'node_id': node_id})
         elif path == '/message':
             print(f"[HTTP] Mensaje recibido via API: {data}")
