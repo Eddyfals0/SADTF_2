@@ -328,9 +328,22 @@
                 }
 
             } else {
-                // DESCONECTANDO
-                isConnected = false;
-                clientId = null;
+                    // Antes de limpiar la UI, avisar al servidor que nos desconectamos
+                    try {
+                        if (clientId) {
+                            await fetch(apiBase + '/disconnect', {
+                                method: 'POST', headers: {'Content-Type':'application/json'},
+                                body: JSON.stringify({ node_id: clientId })
+                            });
+                            log(`Notificado al coordinador de desconexión de ${clientId}`);
+                        }
+                    } catch (e) {
+                        console.warn('No se pudo notificar desconexión al coordinador:', e);
+                    }
+
+                    // DESCONECTANDO
+                    isConnected = false;
+                    clientId = null;
                 
                 // Desbloquear inputs
                 capacityInput.disabled = false;

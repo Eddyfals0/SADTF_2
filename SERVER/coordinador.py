@@ -2,6 +2,7 @@ import socket
 import threading
 import json
 import os
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -14,6 +15,7 @@ HTTP_PORT = 8000        # Puerto HTTP para API (UI)
 # Tabla de nodos registrados: node_id -> {ip, port, conexión}
 nodos_registrados = {}
 conexiones_activas = {}  # node_id -> socket conexión TCP
+last_pong = {}  # node_id -> timestamp del último PONG recibido
 nodes_persistent_file = os.path.join(os.path.dirname(__file__), 'nodes_data.json')
 
 # Contador simple para generar nombres nodo1, nodo2, nodo3, ...
@@ -60,13 +62,23 @@ def discovery_server():
     while True:
         data, addr = sock.recvfrom(1024)
         mensaje = data.decode().strip()
+        client_ip = addr[0]
         print(f"[DISCOVERY] Mensaje '{mensaje}' desde {addr}")
 
         if mensaje == "DISCOVER_COORDINATOR":
-            # Generamos un nuevo node_id único
+            # Si ya tenemos un nodo registrado con esa IP, devolvemos el mismo node_id
             with lock_nodos:
-                node_id = f"nodo{next_node_number}"
-                next_node_number += 1
+                existing = None
+                for nid, info in nodos_registrados.items():
+                    if info.get('ip') == client_ip:
+                        existing = nid
+                        break
+
+                if existing:
+                    node_id = existing
+                else:
+                    node_id = f"nodo{next_node_number}"
+                    next_node_number += 1
 
             respuesta = {
                 "ip": ip_servidor,
@@ -85,7 +97,18 @@ def load_persistent_nodes():
                 data = json.load(f)
             with lock_nodos:
                 nodos_registrados.update(data.get('nodos', {}))
-            print(f"[HTTP] Cargados {len(nodos_registrados)} nodos desde disco.")
+            # Ajustar next_node_number para evitar colisiones
+            global next_node_number
+            max_n = 0
+            for nid in nodos_registrados.keys():
+                if nid.startswith('nodo'):
+                    try:
+                        n = int(nid[4:])
+                        if n > max_n: max_n = n
+                    except Exception:
+                        pass
+            next_node_number = max_n + 1
+            print(f"[HTTP] Cargados {len(nodos_registrados)} nodos desde disco. next_node_number={next_node_number}")
     except Exception as e:
         print(f"[HTTP] Error cargando nodos persistentes: {e}")
 
@@ -114,6 +137,7 @@ def _broadcast_event(event_obj, exclude_node=None):
             if nid in nodos_registrados:
                 # Marcar offline y actualizar persistencia
                 nodos_registrados[nid]['status'] = 'offline'
+                print(f"[BROADCAST] Nodo {nid} marcado offline tras fallo de envío.")
     if remove_list:
         save_persistent_nodes()
 
@@ -145,17 +169,38 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path == '/discover':
-            global next_node_number
+            # Reusar node_id si existe registro para esta IP
+            client_ip = self.client_address[0]
             with lock_nodos:
-                node_id = f"nodo{next_node_number}"
-                next_node_number += 1
+                existing = None
+                for nid, info in nodos_registrados.items():
+                    if info.get('ip') == client_ip:
+                        existing = nid
+                        break
+
+                if existing:
+                    node_id = existing
+                else:
+                    global next_node_number
+                    node_id = f"nodo{next_node_number}"
+                    next_node_number += 1
+
             respuesta = {'ip': obtener_ip_servidor(), 'port': COORD_PORT, 'node_id': node_id}
             self._send_json(respuesta)
         elif path == '/nodes':
+            # Por defecto devolvemos solo nodos online. Para incluir offline usar ?all=1
+            query = urlparse(self.path).query
+            include_all = False
+            if query and 'all=1' in query:
+                include_all = True
+
             with lock_nodos:
                 nodes_list = []
                 for nid, info in nodos_registrados.items():
-                    nodes_list.append({'id': nid, 'ip': info.get('ip'), 'port': info.get('port'), 'capacity': info.get('capacity', 0), 'status': info.get('status', 'unknown'), 'used': info.get('used', 0)})
+                    status = info.get('status', 'unknown')
+                    if not include_all and status != 'online':
+                        continue
+                    nodes_list.append({'id': nid, 'ip': info.get('ip'), 'port': info.get('port'), 'capacity': info.get('capacity', 0), 'status': status, 'used': info.get('used', 0)})
             self._send_json({'nodes': nodes_list})
         else:
             self._send_json({'error': 'Not found'}, status=404)
@@ -194,9 +239,36 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
             _broadcast_event(evento, exclude_node=None)
 
             self._send_json({'status': 'OK', 'node_id': node_id})
+
+        elif path == '/disconnect':
+            node_id = data.get('node_id')
+            if not node_id:
+                self._send_json({'status': 'ERROR', 'message': 'missing node_id'}, status=400)
+                return
+            with lock_nodos:
+                if node_id in nodos_registrados:
+                    nodos_registrados[node_id]['status'] = 'offline'
+                # cerrar conexión TCP activa si existe
+                if node_id in conexiones_activas:
+                    try:
+                        conexiones_activas[node_id].close()
+                    except Exception:
+                        pass
+                    try:
+                        del conexiones_activas[node_id]
+                    except KeyError:
+                        pass
+                save_persistent_nodes()
+
+            evento = {'type': 'NODE_DISCONNECTED', 'node_id': node_id}
+            print(f"[HTTP] Petición de desconexión para {node_id} recibida. Marcado offline.")
+            _broadcast_event(evento, exclude_node=node_id)
+            self._send_json({'status': 'OK', 'node_id': node_id})
+
         elif path == '/message':
             print(f"[HTTP] Mensaje recibido via API: {data}")
             self._send_json({'status': 'OK'})
+
         else:
             self._send_json({'error': 'Not found'}, status=404)
 
@@ -214,6 +286,73 @@ def start_http_server():
     httpd = ThreadingHTTPServer(server_address, SimpleAPIHandler)
     print(f"[HTTP] API escuchando en puerto {HTTP_PORT}...")
     httpd.serve_forever()
+def monitor_connections(interval=10):
+    """
+    Hilo que chequea periódicamente las conexiones activas enviando un PING.
+    Si al enviar se produce una excepción, se marca el nodo como desconectado.
+    """
+    print(f"[MONITOR] Monitor de conexiones iniciado (interval={interval}s)")
+    timeout = max(10, interval * 3)  # tiempo sin PONG para considerar offline
+    while True:
+        now = time.time()
+        to_remove = []
+
+        # 1) Intentar enviar PING a todas las conexiones activas
+        with lock_nodos:
+            for nid, sock in list(conexiones_activas.items()):
+                try:
+                    ping = {"type": "PING"}
+                    sock.sendall(json.dumps(ping).encode())
+                except Exception as e:
+                    print(f"[MONITOR] Error al enviar PING a {nid}: {e}. Marcando para verificación/desconexión.")
+                    to_remove.append(nid)
+
+        # 2) Revisar timestamps de last_pong para detectar nodos que no respondieron
+        with lock_nodos:
+            for nid in list(conexiones_activas.keys()):
+                lp = last_pong.get(nid)
+                if lp is None:
+                    # Si no tenemos registro de PONG y hace más de timeout desde registro, marcar
+                    if now - last_pong.get(nid, 0) > timeout:
+                        to_remove.append(nid)
+                else:
+                    if now - lp > timeout:
+                        print(f"[MONITOR] No PONG de {nid} en {now-lp:.1f}s (> {timeout}s). Marcando offline.")
+                        to_remove.append(nid)
+
+            # Unir removals únicos
+            to_remove = list(dict.fromkeys(to_remove))
+
+            # Procesar desconexiones detectadas
+            for nid in to_remove:
+                try:
+                    if nid in conexiones_activas:
+                        try:
+                            conexiones_activas[nid].close()
+                        except Exception:
+                            pass
+                        del conexiones_activas[nid]
+                except KeyError:
+                    pass
+
+                if nid in nodos_registrados:
+                    nodos_registrados[nid]['status'] = 'offline'
+                    print(f"[MONITOR] Nodo marcado como offline: {nid}")
+                    # limpiar last_pong
+                    try:
+                        del last_pong[nid]
+                    except KeyError:
+                        pass
+
+            if to_remove:
+                save_persistent_nodes()
+                # Notificar a los demás nodos
+                for nid in to_remove:
+                    evento = {"type": "NODE_DISCONNECTED", "node_id": nid}
+                    _broadcast_event(evento, exclude_node=nid)
+
+        # dormir fuera del lock
+        threading.Event().wait(interval)
 
 
 def manejar_nodo(conn, addr):
@@ -255,6 +394,8 @@ def manejar_nodo(conn, addr):
                         "used": 0
                     }
                     conexiones_activas[node_id_actual] = conn
+                    # Registrar last_pong al momento del registro
+                    last_pong[node_id_actual] = time.time()
 
                 print(f"[TCP] Nodo registrado: {node_id_actual} -> {addr[0]}:{listen_port}")
                 print(f"[TCP] Tabla actual de nodos: {list(nodos_registrados.keys())}")
@@ -287,7 +428,6 @@ def manejar_nodo(conn, addr):
                 from_node = msg.get("from")
                 to_node = msg.get("to")
                 contenido = msg.get("content")
-
                 if to_node == "COORDINADOR":
                     # Mensaje dirigido al servidor
                     print(f"\n[MENSAJE] {from_node} → COORDINADOR: {contenido}")
@@ -296,7 +436,6 @@ def manejar_nodo(conn, addr):
                 else:
                     # Mensaje dirigido a otro nodo
                     print(f"\n[MENSAJE] {from_node} → {to_node}: {contenido}")
-                    
                     with lock_nodos:
                         if to_node in conexiones_activas:
                             try:
@@ -313,9 +452,49 @@ def manejar_nodo(conn, addr):
                                 respuesta = json.dumps({"status": "ERROR", "message": f"No se pudo enviar a {to_node}"})
                         else:
                             respuesta = json.dumps({"status": "ERROR", "message": f"Nodo {to_node} no conectado"})
-                    
                     conn.sendall(respuesta.encode())
 
+            elif msg_type == "PONG":
+                # Cliente responde a un PING enviado por el coordinador
+                pong_id = msg.get('node_id') or node_id_actual
+                if pong_id:
+                    with lock_nodos:
+                        last_pong[pong_id] = time.time()
+                # opcional: log corto
+                # print(f"[TCP] PONG recibido de {pong_id}")
+                continue
+
+            elif msg_type == "DISCONNECT":
+                # Cliente solicita desconexión limpia
+                requested_id = msg.get("node_id")
+                if requested_id:
+                    node_id_actual = requested_id
+
+                print(f"[TCP] Nodo {node_id_actual} solicitó desconexión (graceful).")
+                with lock_nodos:
+                    if node_id_actual and node_id_actual in conexiones_activas:
+                        try:
+                            del conexiones_activas[node_id_actual]
+                        except KeyError:
+                            pass
+                    if node_id_actual and node_id_actual in nodos_registrados:
+                        nodos_registrados[node_id_actual]['status'] = 'offline'
+                        save_persistent_nodes()
+
+                # Notificar a otros nodos y log claro
+                evento = {
+                    "type": "NODE_DISCONNECTED",
+                    "node_id": node_id_actual
+                }
+                print(f"[TCP] Nodo {node_id_actual} marcado offline por solicitud del cliente.")
+                _broadcast_event(evento, exclude_node=node_id_actual)
+
+                try:
+                    conn.sendall(json.dumps({"status": "DISCONNECTED", "node_id": node_id_actual}).encode())
+                except Exception:
+                    pass
+
+                break
             else:
                 print(f"[TCP] Mensaje desconocido de {node_id_actual}: {msg}")
 
@@ -326,9 +505,8 @@ def manejar_nodo(conn, addr):
             if node_id_actual and node_id_actual in conexiones_activas:
                 del conexiones_activas[node_id_actual]
             if node_id_actual and node_id_actual in nodos_registrados:
-                # Marcamos como desconectado (offline) y persistimos
+                # Marcamos como desconectado (offline) y persistimos (no eliminar el registro)
                 nodos_registrados[node_id_actual]['status'] = 'offline'
-                del nodos_registrados[node_id_actual]
                 save_persistent_nodes()
                 # Notificar a los demás nodos
                 evento = {
@@ -376,6 +554,10 @@ def main():
     # Hilo para servidor HTTP (API)
     hilo_http = threading.Thread(target=start_http_server, daemon=True)
     hilo_http.start()
+
+    # Hilo monitor de conexiones
+    hilo_monitor = threading.Thread(target=monitor_connections, kwargs={'interval':5}, daemon=True)
+    hilo_monitor.start()
 
     # Servidor TCP principal (bloqueante)
     tcp_server()

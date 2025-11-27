@@ -97,6 +97,18 @@ def escuchar_mensajes():
                     print(f"║ {content:38}║")
                     print(f"╚════════════════════════════════════════╝\n")
                     print("Selecciona una opción (1-4): ", end="", flush=True)
+                elif msg_type == "PING":
+                    # Responder con PONG para que el coordinador confirme la conexión
+                    try:
+                        pong = {"type": "PONG", "node_id": node_id}
+                        with lock_socket:
+                            if coord_socket:
+                                coord_socket.sendall(json.dumps(pong).encode())
+                    except Exception:
+                        pass
+                elif msg_type == "PONG":
+                    # Ignorar PONGs recibidos
+                    pass
                 elif msg_type == "NODE_CONNECTED":
                     nid = msg.get("node_id")
                     ip = msg.get("ip")
@@ -235,7 +247,24 @@ def mostrar_menu():
         elif opcion == "4":
             print("[CLIENTE] Desconectando...")
             if coord_socket:
-                coord_socket.close()
+                try:
+                    # Intentar desconexión limpia
+                    msg = {"type": "DISCONNECT", "node_id": node_id}
+                    with lock_socket:
+                        coord_socket.sendall(json.dumps(msg).encode())
+                        # intentar recibir ack (no obligatorio)
+                        try:
+                            resp = coord_socket.recv(1024).decode()
+                            print(f"[CLIENTE] ACK desconexión: {resp}")
+                        except Exception:
+                            pass
+                except Exception as e:
+                    print(f"[CLIENTE] Error enviando DISCONNECT: {e}")
+                finally:
+                    try:
+                        coord_socket.close()
+                    except Exception:
+                        pass
             break
         
         else:

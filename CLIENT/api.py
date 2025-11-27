@@ -2,7 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS # Para permitir que el HTML hable con el servidor
 
 app = Flask(__name__)
-CORS(app) # Importante para evitar errores de seguridad del navegador
+CORS(app) 
 
 # --- VARIABLES GLOBALES DEL NODO ---
 capacidad_nodo = 0
