@@ -52,28 +52,34 @@
             <i class="fa-solid fa-network-wired text-blue-500 text-2xl"></i>
             <div>
                 <h1 class="text-xl font-bold text-white tracking-wide">SADTF <span class="text-xs font-normal text-slate-400">v1.0</span></h1>
-                <p class="text-xs text-slate-400">Sistema de Archivos Distribuido Tolerante a Fallas</p>
+                <p class="text-xs text-slate-400 hidden sm:block">Sistema de Archivos Distribuido Tolerante a Fallas</p>
             </div>
         </div>
 
-        <div class="flex items-center gap-4">
+        <div class="flex items-center gap-3">
             
-            <!-- Selector de Capacidad (NUEVO) -->
+            <!-- Selector de IP Coordinador (NUEVO) -->
+            <div class="hidden md:flex items-center gap-2 bg-slate-700/50 p-1.5 rounded-lg border border-slate-600" title="Dirección IP del Coordinador">
+                <label for="coordinatorIp" class="text-xs text-slate-400 font-medium pl-2"><i class="fa-solid fa-satellite-dish mr-1"></i>IP Coord:</label>
+                <input type="text" id="coordinatorIp" value="localhost:8000" placeholder="192.168.X.X:8000" class="w-28 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm text-center text-white focus:outline-none focus:border-blue-500 transition-colors placeholder-slate-500 font-mono">
+            </div>
+
+            <!-- Selector de Capacidad -->
             <div class="hidden sm:flex items-center gap-2 bg-slate-700/50 p-1.5 rounded-lg border border-slate-600" title="Definir espacio compartido (50-100MB)">
-                <label for="nodeCapacity" class="text-xs text-slate-400 font-medium pl-2"><i class="fa-solid fa-hard-drive mr-1"></i>Capacidad (MB):</label>
+                <label for="nodeCapacity" class="text-xs text-slate-400 font-medium pl-2"><i class="fa-solid fa-hard-drive mr-1"></i>Cap (MB):</label>
                 <input type="number" id="nodeCapacity" min="50" max="100" value="70" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm text-center text-white focus:outline-none focus:border-blue-500 transition-colors placeholder-slate-500">
             </div>
 
             <!-- Info del Cliente Local -->
-            <div class="hidden md:flex flex-col items-end mr-2 ml-2">
+            <div class="hidden lg:flex flex-col items-end mr-2 ml-2">
                 <span class="text-xs text-slate-400">ID Cliente Local</span>
                 <span id="clientIdDisplay" class="font-mono text-sm text-blue-400">Desconectado</span>
             </div>
 
             <!-- Botón de Conexión -->
-            <button id="btnConnect" onclick="toggleConnection()" class="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-semibold transition-all shadow-lg border border-red-500">
+            <button id="btnConnect" onclick="toggleConnection()" class="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-semibold transition-all shadow-lg border border-red-500 shrink-0">
                 <i class="fa-solid fa-power-off"></i>
-                <span id="btnConnectText">Conectar</span>
+                <span id="btnConnectText" class="hidden sm:inline">Conectar</span>
             </button>
         </div>
     </header>
@@ -225,118 +231,112 @@
 
         // --- LÓGICA DE CONEXIÓN ---
 
-        function toggleConnection() {
+        async function toggleConnection() {
             const btn = document.getElementById('btnConnect');
             const btnText = document.getElementById('btnConnectText');
             const idDisplay = document.getElementById('clientIdDisplay');
             const capacityInput = document.getElementById('nodeCapacity');
+            const ipInput = document.getElementById('coordinatorIp'); // Referencia al nuevo input
 
             if (!isConnected) {
                 // VALIDACIÓN DE CAPACIDAD (50-100 MB)
                 const capValue = parseInt(capacityInput.value);
+                const ipValue = ipInput.value.trim();
+
                 if (isNaN(capValue) || capValue < 50 || capValue > 100) {
                     alert("La capacidad del nodo debe estar entre 50 y 100 MB.");
                     capacityInput.focus();
                     return;
                 }
-
-                // SIMULACIÓN: CONECTANDO
-                capacityInput.disabled = true; // Bloquear input al conectar
-                capacityInput.classList.add('opacity-50', 'cursor-not-allowed');
                 
+                if (ipValue === "") {
+                    alert("Por favor ingresa la IP del Coordinador.");
+                    ipInput.focus();
+                    return;
+                }
+
+                // Bloquear inputs
+                capacityInput.disabled = true;
+                capacityInput.classList.add('opacity-50', 'cursor-not-allowed');
+                ipInput.disabled = true;
+                ipInput.classList.add('opacity-50', 'cursor-not-allowed');
+
                 btn.classList.replace('bg-red-600', 'bg-yellow-500');
                 btn.classList.replace('hover:bg-red-500', 'hover:bg-yellow-400');
                 btn.classList.replace('border-red-500', 'border-yellow-500');
                 btnText.innerText = "Conectando...";
-                
-                // Llamar a la API real: discover -> register -> obtener nodos
-                (async () => {
-                    try {
-                        // 1) Discover (pide node_id sugerido)
-                        const discover = await apiDiscover();
-                        if (!(discover && discover.node_id)) {
-                            alert('Error: no se pudo contactar al coordinador (discover). Comprueba que el servidor está corriendo en http://localhost:8000');
-                            log('ERROR: discover falló. No se establecerá la conexión.');
-                            // Revertir UI
-                            capacityInput.disabled = false;
-                            capacityInput.classList.remove('opacity-50', 'cursor-not-allowed');
-                            btn.classList.replace('bg-yellow-500', 'bg-red-600');
-                            btn.classList.replace('hover:bg-yellow-400', 'hover:bg-red-500');
-                            btn.classList.replace('border-yellow-500', 'border-red-500');
-                            btnText.innerText = 'Conectar';
-                            return;
-                        }
 
-                        clientId = discover.node_id;
-                        // Mostrar ID provisional en UI
-                        isConnected = true;
-                        idDisplay.innerText = clientId;
-                        idDisplay.classList.replace('text-blue-400', 'text-green-400');
+                // Construir base API (acepta IP o URL completa)
+                let apiBase = ipValue;
+                if (!apiBase.startsWith('http://') && !apiBase.startsWith('https://')) {
+                    apiBase = 'http://' + apiBase;
+                }
+                // Si no tiene puerto, agregar :8000
+                if (!apiBase.includes(':8000') && !apiBase.includes(':8001') && !apiBase.includes(':')) {
+                    apiBase = apiBase + ':8000';
+                }
 
-                        // 2) Registrar nodo en el servidor con capacidad
-                        const reg = await apiRegister(clientId, capValue);
-                        if (!(reg && reg.status === 'OK')) {
-                            alert('Error: registro falló en el servidor. Revirtiendo estado.');
-                            log('ERROR: registro falló en el servidor.');
-                            // Revertir UI
-                            isConnected = false;
-                            clientId = null;
-                            capacityInput.disabled = false;
-                            capacityInput.classList.remove('opacity-50', 'cursor-not-allowed');
-                            idDisplay.innerText = 'Desconectado';
-                            idDisplay.classList.replace('text-green-400', 'text-blue-400');
-                            btn.classList.replace('bg-yellow-500', 'bg-red-600');
-                            btn.classList.replace('hover:bg-yellow-400', 'hover:bg-red-500');
-                            btn.classList.replace('border-yellow-500', 'border-red-500');
-                            btnText.innerText = 'Conectar';
-                            return;
-                        }
+                log(`Intentando conectar a Coordinador en: ${apiBase}...`);
 
-                        // 3) Actualizar UI y estilos del botón
-                        btn.classList.replace('bg-yellow-500', 'bg-green-600');
-                        btn.classList.replace('hover:bg-yellow-400', 'hover:bg-green-500');
-                        btn.classList.replace('border-yellow-500', 'border-green-500');
-                        btnText.innerText = 'Desconectar';
+                try {
+                    // 1) Discover para obtener node_id
+                    const dRes = await fetch(apiBase + '/discover');
+                    if (!dRes.ok) throw new Error('Discover falló');
+                    const djson = await dRes.json();
+                    const assignedId = djson.node_id || ('nodo' + Math.floor(Math.random()*10000));
 
-                        log(`Conexión establecida con el servidor SADTF.`);
-                        log(`Nodo iniciado con capacidad: ${capValue} MB`);
+                    // 2) Registrar via HTTP
+                    const regRes = await fetch(apiBase + '/register', {
+                        method: 'POST', headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({ node_id: assignedId, capacity: capValue })
+                    });
+                    if (!regRes.ok) throw new Error('Register falló');
+                    const rjson = await regRes.json();
 
-                        // 4) Solicitar lista de nodos reales al servidor y renderizar
-                        const nodesResp = await apiGetNodes();
-                        if (nodesResp && nodesResp.nodes) {
-                            nodesData = nodesResp.nodes;
-                            renderNodes();
-                        } else {
-                            // No usar mocks: mostrar error en consola UI
-                            log('ERROR: No se pudo obtener la lista de nodos desde el servidor.');
-                            const consoleDiv = document.getElementById('view-logs');
-                            const p = document.createElement('p');
-                            p.innerHTML = `<span class="text-red-400">[ERROR]</span> No se pudo obtener la lista de nodos. Comprueba el servidor.`;
-                            consoleDiv.appendChild(p);
-                        }
-                    } catch (e) {
-                        alert('Error inesperado durante la conexión. Revisa la consola.');
-                        console.error(e);
-                        // Revertir UI
-                        capacityInput.disabled = false;
-                        capacityInput.classList.remove('opacity-50', 'cursor-not-allowed');
-                        btn.classList.replace('bg-yellow-500', 'bg-red-600');
-                        btn.classList.replace('hover:bg-yellow-400', 'hover:bg-red-500');
-                        btn.classList.replace('border-yellow-500', 'border-red-500');
-                        btnText.innerText = 'Conectar';
-                        isConnected = false;
-                        clientId = null;
-                    }
-                })();
+                    // Conexión exitosa
+                    isConnected = true;
+                    clientId = assignedId;
+                    idDisplay.innerText = clientId;
+                    idDisplay.classList.replace('text-blue-400', 'text-green-400');
+
+                    btn.classList.replace('bg-yellow-500', 'bg-green-600');
+                    btn.classList.replace('hover:bg-yellow-400', 'hover:bg-green-500');
+                    btn.classList.replace('border-yellow-500', 'border-green-500');
+                    btnText.innerText = "Desconectar";
+
+                    log(`Conexión EXITOSA con ${apiBase}.`);
+                    log(`Nodo registrado con ID: ${clientId}, capacidad: ${capValue} MB`);
+
+                    // iniciar polling cada 2s
+                    await startPolling(apiBase);
+                    pollInterval = setInterval(() => startPolling(apiBase), 2000);
+
+                } catch (err) {
+                    // falla: revertir UI
+                    alert('No se pudo conectar al coordinador: ' + err.message);
+                    console.error(err);
+                    capacityInput.disabled = false;
+                    capacityInput.classList.remove('opacity-50', 'cursor-not-allowed');
+                    ipInput.disabled = false;
+                    ipInput.classList.remove('opacity-50', 'cursor-not-allowed');
+                    btn.classList.replace('bg-yellow-500', 'bg-red-600');
+                    btn.classList.replace('hover:bg-yellow-400', 'hover:bg-red-500');
+                    btn.classList.replace('border-yellow-500', 'border-red-500');
+                    btnText.innerText = "Conectar";
+                    btnConnect.disabled = false;
+                    return;
+                }
 
             } else {
                 // DESCONECTANDO
                 isConnected = false;
                 clientId = null;
                 
-                // Desbloquear input
+                // Desbloquear inputs
                 capacityInput.disabled = false;
                 capacityInput.classList.remove('opacity-50', 'cursor-not-allowed');
+                ipInput.disabled = false;
+                ipInput.classList.remove('opacity-50', 'cursor-not-allowed');
 
                 idDisplay.innerText = "Desconectado";
                 idDisplay.classList.replace('text-green-400', 'text-blue-400');
@@ -353,79 +353,6 @@
                 updateStorageBar(0, 100);
                 
                 log("Desconectado del sistema.");
-            }
-        }
- 
-        // --- API STUBS: llamadas a tu API (conectadas, sin lógica de negocio aún) ---
-        // Ajusta API_BASE si tu API corre en otra URL/puerto (ej: 'http://localhost:8000')
-        // Por defecto apuntamos al coordinador HTTP en el puerto 8000
-        const API_BASE = 'http://localhost:8000';
-
-        async function apiDiscover() {
-            try {
-                const resp = await fetch(`${API_BASE}/discover`, { method: 'GET' });
-                const data = await resp.json();
-                console.log('[API] discover ->', data);
-                return data; // { ip, port, node_id }
-            } catch (e) {
-                console.warn('[API] discover error', e);
-                return null;
-            }
-        }
-
-        async function apiRegister(nodeId, capacity) {
-            try {
-                const body = { node_id: nodeId, capacity };
-                const resp = await fetch(`${API_BASE}/register`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-                });
-                const data = await resp.json();
-                console.log('[API] register ->', data);
-                return data;
-            } catch (e) {
-                console.warn('[API] register error', e);
-                return null;
-            }
-        }
-
-        async function apiGetNodes() {
-            try {
-                const resp = await fetch(`${API_BASE}/nodes`, { method: 'GET' });
-                const data = await resp.json();
-                console.log('[API] nodes ->', data);
-                return data; // { nodes: [...] }
-            } catch (e) {
-                console.warn('[API] nodes error', e);
-                return null;
-            }
-        }
-
-        async function apiSendMessage(to, content) {
-            try {
-                const body = { from: clientId, to, content };
-                const resp = await fetch(`${API_BASE}/message`, {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-                });
-                const data = await resp.json();
-                console.log('[API] send message ->', data);
-                return data;
-            } catch (e) {
-                console.warn('[API] send message error', e);
-                return null;
-            }
-        }
-
-        async function apiUploadFile(file) {
-            try {
-                const form = new FormData();
-                form.append('file', file);
-                const resp = await fetch(`${API_BASE}/upload`, { method: 'POST', body: form });
-                const data = await resp.json();
-                console.log('[API] upload ->', data);
-                return data;
-            } catch (e) {
-                console.warn('[API] upload error', e);
-                return null;
             }
         }
 
@@ -450,6 +377,31 @@
                 { name: "demo_video.mp4", date: "2025-11-01", size: "45.0 MB", type: "vid", url: "https://www.w3schools.com/html/mov_bbb.mp4" }
             ];
             renderFiles();
+        }
+
+        // --- FUNCIONES DE INTEGRACIÓN CON API ---
+        async function apiGetNodes(apiBase) {
+            try {
+                const res = await fetch(apiBase + '/nodes');
+                if (!res.ok) throw new Error('nodes failed');
+                return await res.json();
+            } catch (e) {
+                console.error('apiGetNodes error', e);
+                throw e;
+            }
+        }
+
+        async function startPolling(apiBase) {
+            try {
+                const data = await apiGetNodes(apiBase);
+                // data: { nodes: [...] }
+                nodesData = (data && data.nodes) ? data.nodes.map(n => ({ id: n.id || n.node_id || n.node, ip: n.ip, status: n.status || 'unknown', capacity: n.capacity || n.capacity || 0, used: n.used || 0 })) : [];
+                renderNodes();
+            } catch (e) {
+                console.error('startPolling error', e);
+                const tbody = document.getElementById('nodesTableBody');
+                tbody.innerHTML = '<tr><td colspan="4" class="px-4 py-3 text-slate-500">Error al obtener nodos desde el coordinador</td></tr>';
+            }
         }
 
         // --- RENDERIZADO DE UI ---
