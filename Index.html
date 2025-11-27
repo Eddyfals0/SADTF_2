@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SADTF - Sistema de Archivos Distribuido</title>
+    <!-- Tailwind CSS para estilos rápidos y modernos -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Iconos -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- Fuente -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        
+        /* Estilos para el scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        /* Animación de pulso para estado online */
+        .status-dot {
+            height: 10px; width: 10px; border-radius: 50%; display: inline-block;
+        }
+        .online { background-color: #22c55e; box-shadow: 0 0 10px #22c55e; }
+        .offline { background-color: #ef4444; }
+
+        /* Estilo para los bloques de memoria */
+        .memory-block {
+            width: 20px; height: 20px; margin: 2px; border-radius: 3px;
+            transition: all 0.2s;
+        }
+        .memory-block:hover { transform: scale(1.5); z-index: 10; cursor: help; }
+        .block-free { background-color: #334155; }
+        .block-used { background-color: #3b82f6; border: 1px solid #60a5fa; }
+        .block-replica { background-color: #a855f7; border: 1px solid #c084fc; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-200 h-screen flex flex-col overflow-hidden">
+
+    <!-- HEADER / BARRA SUPERIOR -->
+    <header class="bg-slate-800 border-b border-slate-700 h-16 flex items-center justify-between px-6 shadow-lg z-20">
+        <div class="flex items-center gap-3">
+            <i class="fa-solid fa-network-wired text-blue-500 text-2xl"></i>
+            <div>
+                <h1 class="text-xl font-bold text-white tracking-wide">SADTF <span class="text-xs font-normal text-slate-400">v1.0</span></h1>
+                <p class="text-xs text-slate-400">Sistema de Archivos Distribuido Tolerante a Fallas</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-4">
+            
+            <!-- Selector de Capacidad (NUEVO) -->
+            <div class="hidden sm:flex items-center gap-2 bg-slate-700/50 p-1.5 rounded-lg border border-slate-600" title="Definir espacio compartido (50-100MB)">
+                <label for="nodeCapacity" class="text-xs text-slate-400 font-medium pl-2"><i class="fa-solid fa-hard-drive mr-1"></i>Capacidad (MB):</label>
+                <input type="number" id="nodeCapacity" min="50" max="100" value="70" class="w-16 bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm text-center text-white focus:outline-none focus:border-blue-500 transition-colors placeholder-slate-500">
+            </div>
+
+            <!-- Info del Cliente Local -->
+            <div class="hidden md:flex flex-col items-end mr-2 ml-2">
+                <span class="text-xs text-slate-400">ID Cliente Local</span>
+                <span id="clientIdDisplay" class="font-mono text-sm text-blue-400">Desconectado</span>
+            </div>
+
+            <!-- Botón de Conexión -->
+            <button id="btnConnect" onclick="toggleConnection()" class="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-semibold transition-all shadow-lg border border-red-500">
+                <i class="fa-solid fa-power-off"></i>
+                <span id="btnConnectText">Conectar</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- CONTENIDO PRINCIPAL -->
+    <main class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+        
+        <!-- COLUMNA IZQUIERDA: GESTIÓN DE ARCHIVOS -->
+        <section class="w-full md:w-1/2 flex flex-col border-r border-slate-700 bg-slate-800/50 p-4">
+            
+            <!-- Área de Carga -->
+            <div class="mb-4 p-6 border-2 border-dashed border-slate-600 rounded-xl bg-slate-800/80 flex flex-col items-center justify-center hover:border-blue-500 transition-colors cursor-pointer group" onclick="document.getElementById('fileInput').click()">
+                <input type="file" id="fileInput" class="hidden" onchange="handleFileUpload(this)">
+                <i class="fa-solid fa-cloud-arrow-up text-3xl text-slate-500 group-hover:text-blue-400 mb-2 transition-colors"></i>
+                <h3 class="font-semibold text-slate-300">Subir Archivo al Sistema Distribuido</h3>
+                <p class="text-xs text-slate-500 mt-1">Soporta IMG, VID, PDF. (Se dividirá en bloques de 1MB)</p>
+            </div>
+
+            <!-- Lista de Archivos -->
+            <div class="flex items-center justify-between mb-2">
+                <h2 class="text-lg font-semibold text-white"><i class="fa-regular fa-folder-open mr-2"></i>Mis Archivos</h2>
+                <span id="fileCount" class="text-xs bg-slate-700 px-2 py-1 rounded">0 archivos</span>
+            </div>
+
+            <div class="flex-1 overflow-y-auto pr-2 space-y-2" id="fileListContainer">
+                <!-- Los archivos se generarán aquí dinámicamente -->
+                <div class="text-center text-slate-500 mt-10 italic">
+                    No hay archivos en el sistema. Conéctate para sincronizar.
+                </div>
+            </div>
+        </section>
+
+
+        <!-- COLUMNA DERECHA: ESTADO DEL SISTEMA Y NODOS -->
+        <section class="w-full md:w-1/2 flex flex-col bg-slate-900 p-4">
+            
+            <!-- Pestañas de Navegación del Panel Derecho -->
+            <div class="flex gap-2 mb-4 border-b border-slate-700 pb-2">
+                <button onclick="switchTab('nodes')" id="tab-nodes" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-blue-600 text-white transition-colors">
+                    <i class="fa-solid fa-server mr-2"></i>Nodos Conectados
+                </button>
+                <button onclick="switchTab('blocks')" id="tab-blocks" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:text-white transition-colors">
+                    <i class="fa-solid fa-cubes mr-2"></i>Tabla de Bloques
+                </button>
+                <button onclick="switchTab('logs')" id="tab-logs" class="px-4 py-2 rounded-t-lg text-sm font-semibold bg-slate-800 text-slate-400 hover:text-white transition-colors">
+                    <i class="fa-solid fa-terminal mr-2"></i>Consola
+                </button>
+            </div>
+
+            <div class="flex-1 overflow-hidden relative">
+                
+                <!-- VISTA: NODOS -->
+                <div id="view-nodes" class="h-full flex flex-col overflow-y-auto">
+                    <div class="bg-slate-800 rounded-lg border border-slate-700 overflow-hidden">
+                        <table class="w-full text-left text-sm text-slate-400">
+                            <thead class="bg-slate-700 text-slate-200 uppercase font-medium">
+                                <tr>
+                                    <th class="px-4 py-3">ID Nodo</th>
+                                    <th class="px-4 py-3">Dirección IP</th>
+                                    <th class="px-4 py-3 text-center">Estado</th>
+                                    <th class="px-4 py-3 text-right">Espacio (MB)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="nodesTableBody" class="divide-y divide-slate-700">
+                                <!-- Filas generadas por JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Resumen de Almacenamiento Global -->
+                    <div class="mt-4 p-4 bg-slate-800 rounded-lg border border-slate-700">
+                        <h3 class="text-white font-semibold mb-2">Almacenamiento Global Distribuido</h3>
+                        <div class="w-full bg-slate-700 rounded-full h-4 mb-2 overflow-hidden">
+                            <div id="globalStorageBar" class="bg-gradient-to-r from-blue-500 to-purple-500 h-4 rounded-full transition-all duration-1000" style="width: 0%"></div>
+                        </div>
+                        <div class="flex justify-between text-xs text-slate-400">
+                            <span id="usedStorageText">0 MB Usados</span>
+                            <span id="totalStorageText">0 MB Totales</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VISTA: TABLA DE BLOQUES (Mapa visual) -->
+                <div id="view-blocks" class="h-full hidden overflow-y-auto">
+                    <div class="bg-slate-800 p-4 rounded-lg border border-slate-700 h-full">
+                        <h3 class="text-white font-semibold mb-4 text-sm">Mapa de Distribución de Bloques (1MB c/u)</h3>
+                        <div class="flex gap-4 mb-4 text-xs">
+                            <div class="flex items-center gap-1"><div class="w-3 h-3 bg-slate-600 rounded"></div> Libre</div>
+                            <div class="flex items-center gap-1"><div class="w-3 h-3 bg-blue-500 border border-blue-400 rounded"></div> Original</div>
+                            <div class="flex items-center gap-1"><div class="w-3 h-3 bg-purple-500 border border-purple-400 rounded"></div> Réplica</div>
+                        </div>
+                        
+                        <!-- Grid de bloques -->
+                        <div id="blocksGrid" class="flex flex-wrap content-start h-full pb-10">
+                            <!-- Bloques generados dinámicamente -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- VISTA: LOGS / CONSOLA -->
+                <div id="view-logs" class="h-full hidden flex-col bg-black rounded-lg border border-slate-700 p-4 font-mono text-xs overflow-y-auto text-green-400 shadow-inner">
+                    <p>[SYSTEM] Esperando conexión al servidor Python...</p>
+                </div>
+
+            </div>
+        </section>
+    </main>
+
+    <!-- MODAL DE PREVISUALIZACIÓN -->
+    <div id="previewModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-slate-800 rounded-xl shadow-2xl max-w-4xl w-full border border-slate-600 flex flex-col max-h-[90vh]">
+            <div class="flex justify-between items-center p-4 border-b border-slate-700">
+                <h3 id="modalTitle" class="text-white font-semibold text-lg">Visualizar Archivo</h3>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            <div class="p-6 flex-1 overflow-auto flex items-center justify-center bg-slate-900/50" id="modalContent">
+                <!-- Contenido dinámico (img/video/info) -->
+            </div>
+            <!-- Tabla de atributos del archivo específico -->
+            <div class="p-4 bg-slate-900 border-t border-slate-700">
+                <h4 class="text-xs font-bold uppercase text-slate-500 mb-2">Atributos de distribución (Bloques)</h4>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-xs text-left text-slate-300">
+                        <thead class="text-slate-500">
+                            <tr><th>Bloque #</th><th>Ubicación (Nodo)</th><th>Estado</th><th>Hash (Simulado)</th></tr>
+                        </thead>
+                        <tbody id="fileAttributesTable"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- ESTADO DE LA APLICACIÓN ---
+        let isConnected = false;
+        let clientId = null;
+        const totalNodes = 4; // Simulación
+        
+        // Mock data para simular backend
+        let systemFiles = [];
+        let nodesData = [];
+
+        // --- FUNCIONES DE INICIALIZACIÓN ---
+        
+        function init() {
+            log("Interfaz inicializada. Listo para conectar.");
+        }
+
+        // --- LÓGICA DE CONEXIÓN ---
+
+        function toggleConnection() {
+            const btn = document.getElementById('btnConnect');
+            const btnText = document.getElementById('btnConnectText');
+            const idDisplay = document.getElementById('clientIdDisplay');
+            const capacityInput = document.getElementById('nodeCapacity');
+
+            if (!isConnected) {
+                // VALIDACIÓN DE CAPACIDAD (50-100 MB)
+                const capValue = parseInt(capacityInput.value);
+                if (isNaN(capValue) || capValue < 50 || capValue > 100) {
+                    alert("La capacidad del nodo debe estar entre 50 y 100 MB.");
+                    capacityInput.focus();
+                    return;
+                }
+
+                // SIMULACIÓN: CONECTANDO
+                capacityInput.disabled = true; // Bloquear input al conectar
+                capacityInput.classList.add('opacity-50', 'cursor-not-allowed');
+                
+                btn.classList.replace('bg-red-600', 'bg-yellow-500');
+                btn.classList.replace('hover:bg-red-500', 'hover:bg-yellow-400');
+                btn.classList.replace('border-red-500', 'border-yellow-500');
+                btnText.innerText = "Conectando...";
+                
+                // Llamar a la API real: discover -> register -> obtener nodos
+                (async () => {
+                    try {
+                        // 1) Discover (pide node_id sugerido)
+                        const discover = await apiDiscover();
+                        if (!(discover && discover.node_id)) {
+                            alert('Error: no se pudo contactar al coordinador (discover). Comprueba que el servidor está corriendo en http://localhost:8000');
+                            log('ERROR: discover falló. No se establecerá la conexión.');
+                            // Revertir UI
+                            capacityInput.disabled = false;
+                            capacityInput.classList.remove('opacity-50', 'cursor-not-allowed');
+                            btn.classList.replace('bg-yellow-500', 'bg-red-600');
+                            btn.classList.replace('hover:bg-yellow-400', 'hover:bg-red-500');
+                            btn.classList.replace('border-yellow-500', 'border-red-500');
+                            btnText.innerText = 'Conectar';
+                            return;
+                        }
+
+                        clientId = discover.node_id;
+                        // Mostrar ID provisional en UI
+                        isConnected = true;
+                        idDisplay.innerText = clientId;
+                        idDisplay.classList.replace('text-blue-400', 'text-green-400');
+
+                        // 2) Registrar nodo en el servidor con capacidad
+                        const reg = await apiRegister(clientId, capValue);
+                        if (!(reg && reg.status === 'OK')) {
+                            alert('Error: registro falló en el servidor. Revirtiendo estado.');
+                            log('ERROR: registro falló en el servidor.');
+                            // Revertir UI
+                            isConnected = false;
+                            clientId = null;
+                            capacityInput.disabled = false;
+                            capacityInput.classList.remove('opacity-50', 'cursor-not-allowed');
+                            idDisplay.innerText = 'Desconectado';
+                            idDisplay.classList.replace('text-green-400', 'text-blue-400');
+                            btn.classList.replace('bg-yellow-500', 'bg-red-600');
+                            btn.classList.replace('hover:bg-yellow-400', 'hover:bg-red-500');
+                            btn.classList.replace('border-yellow-500', 'border-red-500');
+                            btnText.innerText = 'Conectar';
+                            return;
+                        }
+
+                        // 3) Actualizar UI y estilos del botón
+                        btn.classList.replace('bg-yellow-500', 'bg-green-600');
+                        btn.classList.replace('hover:bg-yellow-400', 'hover:bg-green-500');
+                        btn.classList.replace('border-yellow-500', 'border-green-500');
+                        btnText.innerText = 'Desconectar';
+
+                        log(`Conexión establecida con el servidor SADTF.`);
+                        log(`Nodo iniciado con capacidad: ${capValue} MB`);
+
+                        // 4) Solicitar lista de nodos reales al servidor y renderizar
+                        const nodesResp = await apiGetNodes();
+                        if (nodesResp && nodesResp.nodes) {
+                            nodesData = nodesResp.nodes;
+                            renderNodes();
+                        } else {
+                            // No usar mocks: mostrar error en consola UI
+                            log('ERROR: No se pudo obtener la lista de nodos desde el servidor.');
+                            const consoleDiv = document.getElementById('view-logs');
+                            const p = document.createElement('p');
+                            p.innerHTML = `<span class="text-red-400">[ERROR]</span> No se pudo obtener la lista de nodos. Comprueba el servidor.`;
+                            consoleDiv.appendChild(p);
+                        }
+                    } catch (e) {
+                        alert('Error inesperado durante la conexión. Revisa la consola.');
+                        console.error(e);
+                        // Revertir UI
+                        capacityInput.disabled = false;
+                        capacityInput.classList.remove('opacity-50', 'cursor-not-allowed');
+                        btn.classList.replace('bg-yellow-500', 'bg-red-600');
+                        btn.classList.replace('hover:bg-yellow-400', 'hover:bg-red-500');
+                        btn.classList.replace('border-yellow-500', 'border-red-500');
+                        btnText.innerText = 'Conectar';
+                        isConnected = false;
+                        clientId = null;
+                    }
+                })();
+
+            } else {
+                // DESCONECTANDO
+                isConnected = false;
+                clientId = null;
+                
+                // Desbloquear input
+                capacityInput.disabled = false;
+                capacityInput.classList.remove('opacity-50', 'cursor-not-allowed');
+
+                idDisplay.innerText = "Desconectado";
+                idDisplay.classList.replace('text-green-400', 'text-blue-400');
+                
+                btn.classList.replace('bg-green-600', 'bg-red-600');
+                btn.classList.replace('hover:bg-green-500', 'hover:bg-red-500');
+                btn.classList.replace('border-green-500', 'border-red-500');
+                btnText.innerText = "Conectar";
+
+                // Limpiar interfaz
+                document.getElementById('fileListContainer').innerHTML = '<div class="text-center text-slate-500 mt-10 italic">Desconectado.</div>';
+                document.getElementById('nodesTableBody').innerHTML = '';
+                document.getElementById('blocksGrid').innerHTML = '';
+                updateStorageBar(0, 100);
+                
+                log("Desconectado del sistema.");
+            }
+        }
+ 
+        // --- API STUBS: llamadas a tu API (conectadas, sin lógica de negocio aún) ---
+        // Ajusta API_BASE si tu API corre en otra URL/puerto (ej: 'http://localhost:8000')
+        // Por defecto apuntamos al coordinador HTTP en el puerto 8000
+        const API_BASE = 'http://localhost:8000';
+
+        async function apiDiscover() {
+            try {
+                const resp = await fetch(`${API_BASE}/discover`, { method: 'GET' });
+                const data = await resp.json();
+                console.log('[API] discover ->', data);
+                return data; // { ip, port, node_id }
+            } catch (e) {
+                console.warn('[API] discover error', e);
+                return null;
+            }
+        }
+
+        async function apiRegister(nodeId, capacity) {
+            try {
+                const body = { node_id: nodeId, capacity };
+                const resp = await fetch(`${API_BASE}/register`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                });
+                const data = await resp.json();
+                console.log('[API] register ->', data);
+                return data;
+            } catch (e) {
+                console.warn('[API] register error', e);
+                return null;
+            }
+        }
+
+        async function apiGetNodes() {
+            try {
+                const resp = await fetch(`${API_BASE}/nodes`, { method: 'GET' });
+                const data = await resp.json();
+                console.log('[API] nodes ->', data);
+                return data; // { nodes: [...] }
+            } catch (e) {
+                console.warn('[API] nodes error', e);
+                return null;
+            }
+        }
+
+        async function apiSendMessage(to, content) {
+            try {
+                const body = { from: clientId, to, content };
+                const resp = await fetch(`${API_BASE}/message`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                });
+                const data = await resp.json();
+                console.log('[API] send message ->', data);
+                return data;
+            } catch (e) {
+                console.warn('[API] send message error', e);
+                return null;
+            }
+        }
+
+        async function apiUploadFile(file) {
+            try {
+                const form = new FormData();
+                form.append('file', file);
+                const resp = await fetch(`${API_BASE}/upload`, { method: 'POST', body: form });
+                const data = await resp.json();
+                console.log('[API] upload ->', data);
+                return data;
+            } catch (e) {
+                console.warn('[API] upload error', e);
+                return null;
+            }
+        }
+
+        // --- GENERACIÓN DE DATOS SIMULADOS (MOCKS) ---
+        // TODO: Reemplazar estas funciones con llamadas reales a tu API Python
+
+        function loadMockData() {
+            // 1. Simular Nodos
+            nodesData = [
+                { id: "NODO_01", ip: "192.168.1.10", status: "online", capacity: 100, used: 45 },
+                { id: "NODO_02", ip: "192.168.1.11", status: "online", capacity: 80, used: 20 },
+                { id: "NODO_03", ip: "192.168.1.12", status: "offline", capacity: 50, used: 0 }, // Nodo caído simulado
+                { id: "NODO_04", ip: "192.168.1.13", status: "online", capacity: 100, used: 60 },
+            ];
+            renderNodes();
+            renderBlocksMap();
+
+            // 2. Simular Archivos Existentes
+            systemFiles = [
+                { name: "vacaciones.jpg", date: "2025-10-30", size: "3.2 MB", type: "img", url: "https://via.placeholder.com/800x600" },
+                { name: "proyecto_final.pdf", date: "2025-11-06", size: "12.5 MB", type: "doc", url: "" },
+                { name: "demo_video.mp4", date: "2025-11-01", size: "45.0 MB", type: "vid", url: "https://www.w3schools.com/html/mov_bbb.mp4" }
+            ];
+            renderFiles();
+        }
+
+        // --- RENDERIZADO DE UI ---
+
+        function renderNodes() {
+            const tbody = document.getElementById('nodesTableBody');
+            tbody.innerHTML = '';
+            
+            let totalCap = 0;
+            let totalUsed = 0;
+
+            nodesData.forEach(node => {
+                if(node.status === 'online') {
+                    totalCap += node.capacity;
+                    totalUsed += node.used;
+                }
+
+                const row = `
+                    <tr class="hover:bg-slate-800 transition-colors border-b border-slate-700/50">
+                        <td class="px-4 py-3 font-mono text-blue-300">${node.id}</td>
+                        <td class="px-4 py-3 text-slate-500">${node.ip}</td>
+                        <td class="px-4 py-3 text-center">
+                            <span class="inline-flex items-center gap-2 px-2 py-1 rounded-full text-xs font-medium ${node.status === 'online' ? 'bg-green-900 text-green-300 border border-green-700' : 'bg-red-900 text-red-300 border border-red-700'}">
+                                <span class="status-dot ${node.status}"></span>
+                                ${node.status.toUpperCase()}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 text-right font-mono">
+                            ${node.status === 'online' ? node.capacity + ' MB' : '-'}
+                        </td>
+                    </tr>
+                `;
+                tbody.innerHTML += row;
+            });
+
+            updateStorageBar(totalUsed, totalCap);
+        }
+
+        function updateStorageBar(used, total) {
+            const percentage = total > 0 ? (used / total) * 100 : 0;
+            document.getElementById('globalStorageBar').style.width = `${percentage}%`;
+            document.getElementById('usedStorageText').innerText = `${used} MB Usados`;
+            document.getElementById('totalStorageText').innerText = `${total} MB Totales`;
+        }
+
+        function renderFiles() {
+            const container = document.getElementById('fileListContainer');
+            container.innerHTML = '';
+            document.getElementById('fileCount').innerText = `${systemFiles.length} archivos`;
+
+            systemFiles.forEach((file, index) => {
+                let iconClass = "fa-file";
+                let colorClass = "text-slate-400";
+                
+                if (file.type === 'img') { iconClass = "fa-file-image"; colorClass = "text-purple-400"; }
+                else if (file.type === 'vid') { iconClass = "fa-file-video"; colorClass = "text-red-400"; }
+                else if (file.type === 'doc') { iconClass = "fa-file-pdf"; colorClass = "text-orange-400"; }
+
+                const html = `
+                    <div class="glass-panel p-3 rounded-lg flex items-center justify-between group hover:bg-slate-700 transition-all">
+                        <div class="flex items-center gap-3 overflow-hidden">
+                            <div class="w-10 h-10 rounded bg-slate-800 flex items-center justify-center shrink-0">
+                                <i class="fa-regular ${iconClass} ${colorClass} text-xl"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <h4 class="font-medium text-slate-200 truncate pr-2">${file.name}</h4>
+                                <div class="flex gap-3 text-xs text-slate-500">
+                                    <span>${file.size}</span>
+                                    <span>${file.date}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                            <button onclick="viewFile(${index})" title="Ver / Atributos" class="p-2 hover:bg-blue-600 rounded text-slate-300 hover:text-white transition-colors"><i class="fa-solid fa-eye"></i></button>
+                            <button onclick="downloadFile('${file.name}')" title="Descargar" class="p-2 hover:bg-green-600 rounded text-slate-300 hover:text-white transition-colors"><i class="fa-solid fa-download"></i></button>
+                            <button onclick="deleteFile(${index})" title="Eliminar" class="p-2 hover:bg-red-600 rounded text-slate-300 hover:text-white transition-colors"><i class="fa-solid fa-trash"></i></button>
+                        </div>
+                    </div>
+                `;
+                container.innerHTML += html;
+            });
+        }
+
+        function renderBlocksMap() {
+            // Visualización de la tabla de bloques (PDF Pag 1)
+            const grid = document.getElementById('blocksGrid');
+            grid.innerHTML = '';
+
+            // Generar 100 bloques simulados para mostrar distribución
+            for(let i=0; i<120; i++) {
+                const div = document.createElement('div');
+                div.className = 'memory-block';
+                div.title = `Bloque ID: ${i}`;
+                
+                // Simular estado al azar
+                const rand = Math.random();
+                if(rand > 0.8) {
+                    div.classList.add('block-used');
+                    div.title += " (Ocupado - Archivo A)";
+                } else if (rand > 0.6) {
+                    div.classList.add('block-replica');
+                    div.title += " (Réplica - Archivo B)";
+                } else {
+                    div.classList.add('block-free');
+                    div.title += " (Libre)";
+                }
+                grid.appendChild(div);
+            }
+        }
+
+        // --- INTERACCIONES DE ARCHIVOS ---
+
+        function handleFileUpload(input) {
+            if (!isConnected) { alert("Debes conectar primero."); return; }
+            const file = input.files[0];
+            if (file) {
+                log(`Iniciando subida: ${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`);
+                log(`> Dividiendo en bloques de 1MB...`);
+                log(`> Distribuyendo bloques entre Nodos 1, 2 y 4...`);
+                
+                // Simular proceso de carga
+                setTimeout(() => {
+                    const type = file.type.startsWith('image') ? 'img' : (file.type.startsWith('video') ? 'vid' : 'doc');
+                    const newFile = {
+                        name: file.name,
+                        date: new Date().toLocaleDateString(),
+                        size: (file.size/1024).toFixed(0) + " KB",
+                        type: type,
+                        url: URL.createObjectURL(file) // Para previsualización local
+                    };
+                    systemFiles.push(newFile);
+                    renderFiles();
+                    log(`Archivo guardado exitosamente: ${file.name}`);
+                    renderBlocksMap(); // Actualizar mapa de bloques
+                }, 1000);
+            }
+        }
+
+        function deleteFile(index) {
+            if(confirm("¿Eliminar archivo y liberar sus bloques en todos los nodos?")) {
+                const name = systemFiles[index].name;
+                log(`Solicitando eliminación de ${name}...`);
+                log(`> Marcando entradas de tabla de bloques como LIBRES.`);
+                log(`> Eliminando réplicas en nodos...`);
+                systemFiles.splice(index, 1);
+                renderFiles();
+                renderBlocksMap(); // Actualizar mapa visualmente
+            }
+        }
+
+        function downloadFile(name) {
+            log(`Descargando ${name}... Recopilando bloques de nodos disponibles.`);
+            alert(`Descarga simulada de: ${name}\nEl sistema reconstruyó el archivo desde los nodos distribuidos.`);
+        }
+
+        function viewFile(index) {
+            const file = systemFiles[index];
+            const modal = document.getElementById('previewModal');
+            const content = document.getElementById('modalContent');
+            const tableBody = document.getElementById('fileAttributesTable');
+            document.getElementById('modalTitle').innerText = file.name;
+
+            // 1. Mostrar contenido visual
+            content.innerHTML = '';
+            if (file.type === 'img') {
+                content.innerHTML = `<img src="${file.url}" class="max-h-64 rounded shadow-lg border border-slate-600">`;
+            } else if (file.type === 'vid') {
+                content.innerHTML = `<video src="${file.url}" controls class="max-h-64 rounded shadow-lg border border-slate-600"></video>`;
+            } else {
+                content.innerHTML = `<div class="text-center"><i class="fa-solid fa-file-lines text-6xl text-slate-500 mb-4"></i><p>Vista previa no disponible para este formato</p></div>`;
+            }
+
+            // 2. Llenar tabla de atributos (Dónde están los bloques)
+            // Esto simula la "Tabla de bloques" mencionada en el PDF para un archivo específico
+            tableBody.innerHTML = '';
+            // Simulamos que el archivo tiene 3 bloques
+            const mockBlocks = [
+                { id: 1, node: "NODO_01", status: "OK", hash: "a1b2..." },
+                { id: 1, node: "NODO_02", status: "REPLICA", hash: "a1b2..." },
+                { id: 2, node: "NODO_02", status: "OK", hash: "c3d4..." },
+                { id: 2, node: "NODO_04", status: "REPLICA", hash: "c3d4..." },
+                { id: 3, node: "NODO_04", status: "OK", hash: "e5f6..." },
+            ];
+
+            mockBlocks.forEach(b => {
+                const row = `
+                    <tr class="border-b border-slate-800">
+                        <td class="py-2 px-2 text-blue-400">Bloque #${b.id}</td>
+                        <td class="py-2 px-2">${b.node}</td>
+                        <td class="py-2 px-2"><span class="text-xs px-1 rounded ${b.status==='OK'?'bg-green-900 text-green-300':'bg-purple-900 text-purple-300'}">${b.status}</span></td>
+                        <td class="py-2 px-2 font-mono text-slate-500">${b.hash}</td>
+                    </tr>
+                `;
+                tableBody.innerHTML += row;
+            });
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('previewModal').classList.add('hidden');
+        }
+
+        // --- UTILIDADES ---
+
+        function switchTab(tabName) {
+            // Ocultar todas
+            document.getElementById('view-nodes').classList.add('hidden');
+            document.getElementById('view-blocks').classList.add('hidden');
+            document.getElementById('view-logs').classList.remove('flex');
+            document.getElementById('view-logs').classList.add('hidden');
+
+            // Reset botones
+            ['nodes', 'blocks', 'logs'].forEach(t => {
+                const btn = document.getElementById(`tab-${t}`);
+                btn.classList.replace('bg-blue-600', 'bg-slate-800');
+                btn.classList.replace('text-white', 'text-slate-400');
+            });
+
+            // Mostrar activa
+            const activeBtn = document.getElementById(`tab-${tabName}`);
+            activeBtn.classList.replace('bg-slate-800', 'bg-blue-600');
+            activeBtn.classList.replace('text-slate-400', 'text-white');
+
+            if (tabName === 'logs') {
+                document.getElementById(`view-${tabName}`).classList.remove('hidden');
+                document.getElementById(`view-${tabName}`).classList.add('flex');
+            } else {
+                document.getElementById(`view-${tabName}`).classList.remove('hidden');
+            }
+        }
+
+        function log(msg) {
+            const consoleDiv = document.getElementById('view-logs');
+            const time = new Date().toLocaleTimeString();
+            const p = document.createElement('p');
+            p.innerHTML = `<span class="text-slate-500">[${time}]</span> ${msg}`;
+            consoleDiv.appendChild(p);
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+        }
+
+        // Iniciar
+        init();
+
+    </script>
+</body>
+</html>
