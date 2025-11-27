@@ -93,8 +93,23 @@ def discovery_server():
 def load_persistent_nodes():
     try:
         if os.path.exists(nodes_persistent_file):
-            with open(nodes_persistent_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            # Leer de forma robusta: si el archivo está vacío o tiene JSON inválido,
+            # regeneramos la estructura mínima para evitar fallos posteriores.
+            try:
+                with open(nodes_persistent_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    if not content.strip():
+                        data = {'nodos': {}}
+                    else:
+                        data = json.loads(content)
+            except Exception as e:
+                print(f"[HTTP] Archivo de nodos persistentes corrupto o vacío: {e}. Reiniciando archivo.")
+                data = {'nodos': {}}
+                try:
+                    with open(nodes_persistent_file, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2)
+                except Exception as e2:
+                    print(f"[HTTP] Error al regenerar {nodes_persistent_file}: {e2}")
             with lock_nodos:
                 nodos_registrados.update(data.get('nodos', {}))
             # Ajustar next_node_number para evitar colisiones
@@ -121,6 +136,7 @@ def _broadcast_event(event_obj, exclude_node=None):
     Si alguna conexión falla, la elimina de `conexiones_activas`.
     """
     remove_list = []
+    changed = False
     with lock_nodos:
         for nid, sock in list(conexiones_activas.items()):
             if exclude_node and nid == exclude_node:
@@ -137,10 +153,12 @@ def _broadcast_event(event_obj, exclude_node=None):
             except KeyError:
                 pass
             if nid in nodos_registrados:
-                # Marcar offline y actualizar persistencia
+                # Marcar offline (persistir fuera del lock)
                 nodos_registrados[nid]['status'] = 'offline'
                 print(f"[BROADCAST] Nodo {nid} marcado offline tras fallo de envío.")
-    if remove_list:
+                changed = True
+
+    if changed:
         save_persistent_nodes()
 
 
@@ -230,6 +248,13 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
         except Exception:
             data = {}
 
+        # Log inicial para diagnóstico (muestra método, path y cliente)
+        try:
+            client_ip = self.client_address[0]
+        except Exception:
+            client_ip = 'unknown'
+        print(f"[HTTP] do_POST {path} desde {client_ip} body={data}")
+
         if path == '/register':
             node_id = data.get('node_id')
             capacity = data.get('capacity', 0)
@@ -260,10 +285,13 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
             if not node_id:
                 self._send_json({'status': 'ERROR', 'message': 'missing node_id'}, status=400)
                 return
+            # Aplicar cambios bajo lock, pero persistir y broadcast FUERA del lock para evitar deadlocks
+            changed = False
             with lock_nodos:
                 if node_id in nodos_registrados:
                     nodos_registrados[node_id]['status'] = 'offline'
                     nodos_registrados[node_id]['last_seen'] = time.time()
+                    changed = True
                 # cerrar conexión TCP activa si existe
                 if node_id in conexiones_activas:
                     try:
@@ -274,6 +302,8 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                         del conexiones_activas[node_id]
                     except KeyError:
                         pass
+
+            if changed:
                 save_persistent_nodes()
 
             evento = {'type': 'NODE_DISCONNECTED', 'node_id': node_id}
@@ -347,7 +377,8 @@ def monitor_connections(interval=10):
             # Unir removals únicos
             to_remove = list(dict.fromkeys(to_remove))
 
-            # Procesar desconexiones detectadas
+            # Procesar desconexiones detectadas: actualizar estructuras bajo lock
+            removed_copy = []
             for nid in to_remove:
                 try:
                     if nid in conexiones_activas:
@@ -368,13 +399,14 @@ def monitor_connections(interval=10):
                         del last_pong[nid]
                     except KeyError:
                         pass
+                    removed_copy.append(nid)
 
-            if to_remove:
-                save_persistent_nodes()
-                # Notificar a los demás nodos
-                for nid in to_remove:
-                    evento = {"type": "NODE_DISCONNECTED", "node_id": nid}
-                    _broadcast_event(evento, exclude_node=nid)
+        # fuera del lock: persistir y notificar
+        if removed_copy:
+            save_persistent_nodes()
+            for nid in removed_copy:
+                evento = {"type": "NODE_DISCONNECTED", "node_id": nid}
+                _broadcast_event(evento, exclude_node=nid)
 
         # dormir fuera del lock
         threading.Event().wait(interval)
@@ -503,6 +535,7 @@ def manejar_nodo(conn, addr):
                     node_id_actual = requested_id
 
                 print(f"[TCP] Nodo {node_id_actual} solicitó desconexión (graceful).")
+                changed = False
                 with lock_nodos:
                     if node_id_actual and node_id_actual in conexiones_activas:
                         try:
@@ -511,7 +544,11 @@ def manejar_nodo(conn, addr):
                             pass
                     if node_id_actual and node_id_actual in nodos_registrados:
                         nodos_registrados[node_id_actual]['status'] = 'offline'
-                        save_persistent_nodes()
+                        nodos_registrados[node_id_actual]['last_seen'] = time.time()
+                        changed = True
+
+                if changed:
+                    save_persistent_nodes()
 
                 # Notificar a otros nodos y log claro
                 evento = {
@@ -533,20 +570,28 @@ def manejar_nodo(conn, addr):
     except Exception as e:
         print(f"[TCP] Error en conexión de {node_id_actual or addr}: {e}")
     finally:
+        changed = False
         with lock_nodos:
             if node_id_actual and node_id_actual in conexiones_activas:
-                del conexiones_activas[node_id_actual]
+                try:
+                    del conexiones_activas[node_id_actual]
+                except KeyError:
+                    pass
             if node_id_actual and node_id_actual in nodos_registrados:
-                # Marcamos como desconectado (offline) y persistimos (no eliminar el registro)
+                # Marcamos como desconectado (offline) (no eliminar el registro)
                 nodos_registrados[node_id_actual]['status'] = 'offline'
-                save_persistent_nodes()
-                # Notificar a los demás nodos
-                evento = {
-                    "type": "NODE_DISCONNECTED",
-                    "node_id": node_id_actual
-                }
-                print(f"[BROADCAST] Notificando desconexión de {node_id_actual} a {len(conexiones_activas)} nodos")
-                _broadcast_event(evento, exclude_node=node_id_actual)
+                nodos_registrados[node_id_actual]['last_seen'] = time.time()
+                changed = True
+
+        if changed:
+            save_persistent_nodes()
+            # Notificar a los demás nodos
+            evento = {
+                "type": "NODE_DISCONNECTED",
+                "node_id": node_id_actual
+            }
+            print(f"[BROADCAST] Notificando desconexión de {node_id_actual} a {len(conexiones_activas)} nodos")
+            _broadcast_event(evento, exclude_node=node_id_actual)
         
         print(f"[TCP] Desconexión de {node_id_actual or addr}. Nodos activos: {list(nodos_registrados.keys())}")
         conn.close()

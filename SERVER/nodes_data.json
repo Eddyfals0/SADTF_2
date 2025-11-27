@@ -6,15 +6,7 @@
       "capacity": 70,
       "status": "online",
       "used": 0,
-      "last_seen": 1764282815.464122
-    },
-    "nodo2": {
-      "ip": "172.31.14.108",
-      "port": 5000,
-      "capacity": 70,
-      "status": "online",
-      "used": 0,
-      "last_seen": 1764282817.3299067
+      "last_seen": 1764284063.031597
     }
   }
 }
