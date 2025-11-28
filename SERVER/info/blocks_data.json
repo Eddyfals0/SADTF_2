@@ -979,7 +979,497 @@
       "index": 70,
       "status": "free",
       "primary_for": null
+    },
+    "N3001": {
+      "id": "N3001",
+      "node": "nodo3",
+      "index": 1,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3002": {
+      "id": "N3002",
+      "node": "nodo3",
+      "index": 2,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3003": {
+      "id": "N3003",
+      "node": "nodo3",
+      "index": 3,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3004": {
+      "id": "N3004",
+      "node": "nodo3",
+      "index": 4,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3005": {
+      "id": "N3005",
+      "node": "nodo3",
+      "index": 5,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3006": {
+      "id": "N3006",
+      "node": "nodo3",
+      "index": 6,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3007": {
+      "id": "N3007",
+      "node": "nodo3",
+      "index": 7,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3008": {
+      "id": "N3008",
+      "node": "nodo3",
+      "index": 8,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3009": {
+      "id": "N3009",
+      "node": "nodo3",
+      "index": 9,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3010": {
+      "id": "N3010",
+      "node": "nodo3",
+      "index": 10,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3011": {
+      "id": "N3011",
+      "node": "nodo3",
+      "index": 11,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3012": {
+      "id": "N3012",
+      "node": "nodo3",
+      "index": 12,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3013": {
+      "id": "N3013",
+      "node": "nodo3",
+      "index": 13,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3014": {
+      "id": "N3014",
+      "node": "nodo3",
+      "index": 14,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3015": {
+      "id": "N3015",
+      "node": "nodo3",
+      "index": 15,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3016": {
+      "id": "N3016",
+      "node": "nodo3",
+      "index": 16,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3017": {
+      "id": "N3017",
+      "node": "nodo3",
+      "index": 17,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3018": {
+      "id": "N3018",
+      "node": "nodo3",
+      "index": 18,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3019": {
+      "id": "N3019",
+      "node": "nodo3",
+      "index": 19,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3020": {
+      "id": "N3020",
+      "node": "nodo3",
+      "index": 20,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3021": {
+      "id": "N3021",
+      "node": "nodo3",
+      "index": 21,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3022": {
+      "id": "N3022",
+      "node": "nodo3",
+      "index": 22,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3023": {
+      "id": "N3023",
+      "node": "nodo3",
+      "index": 23,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3024": {
+      "id": "N3024",
+      "node": "nodo3",
+      "index": 24,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3025": {
+      "id": "N3025",
+      "node": "nodo3",
+      "index": 25,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3026": {
+      "id": "N3026",
+      "node": "nodo3",
+      "index": 26,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3027": {
+      "id": "N3027",
+      "node": "nodo3",
+      "index": 27,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3028": {
+      "id": "N3028",
+      "node": "nodo3",
+      "index": 28,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3029": {
+      "id": "N3029",
+      "node": "nodo3",
+      "index": 29,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3030": {
+      "id": "N3030",
+      "node": "nodo3",
+      "index": 30,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3031": {
+      "id": "N3031",
+      "node": "nodo3",
+      "index": 31,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3032": {
+      "id": "N3032",
+      "node": "nodo3",
+      "index": 32,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3033": {
+      "id": "N3033",
+      "node": "nodo3",
+      "index": 33,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3034": {
+      "id": "N3034",
+      "node": "nodo3",
+      "index": 34,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3035": {
+      "id": "N3035",
+      "node": "nodo3",
+      "index": 35,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3036": {
+      "id": "N3036",
+      "node": "nodo3",
+      "index": 36,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3037": {
+      "id": "N3037",
+      "node": "nodo3",
+      "index": 37,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3038": {
+      "id": "N3038",
+      "node": "nodo3",
+      "index": 38,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3039": {
+      "id": "N3039",
+      "node": "nodo3",
+      "index": 39,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3040": {
+      "id": "N3040",
+      "node": "nodo3",
+      "index": 40,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3041": {
+      "id": "N3041",
+      "node": "nodo3",
+      "index": 41,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3042": {
+      "id": "N3042",
+      "node": "nodo3",
+      "index": 42,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3043": {
+      "id": "N3043",
+      "node": "nodo3",
+      "index": 43,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3044": {
+      "id": "N3044",
+      "node": "nodo3",
+      "index": 44,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3045": {
+      "id": "N3045",
+      "node": "nodo3",
+      "index": 45,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3046": {
+      "id": "N3046",
+      "node": "nodo3",
+      "index": 46,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3047": {
+      "id": "N3047",
+      "node": "nodo3",
+      "index": 47,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3048": {
+      "id": "N3048",
+      "node": "nodo3",
+      "index": 48,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3049": {
+      "id": "N3049",
+      "node": "nodo3",
+      "index": 49,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3050": {
+      "id": "N3050",
+      "node": "nodo3",
+      "index": 50,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3051": {
+      "id": "N3051",
+      "node": "nodo3",
+      "index": 51,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3052": {
+      "id": "N3052",
+      "node": "nodo3",
+      "index": 52,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3053": {
+      "id": "N3053",
+      "node": "nodo3",
+      "index": 53,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3054": {
+      "id": "N3054",
+      "node": "nodo3",
+      "index": 54,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3055": {
+      "id": "N3055",
+      "node": "nodo3",
+      "index": 55,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3056": {
+      "id": "N3056",
+      "node": "nodo3",
+      "index": 56,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3057": {
+      "id": "N3057",
+      "node": "nodo3",
+      "index": 57,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3058": {
+      "id": "N3058",
+      "node": "nodo3",
+      "index": 58,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3059": {
+      "id": "N3059",
+      "node": "nodo3",
+      "index": 59,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3060": {
+      "id": "N3060",
+      "node": "nodo3",
+      "index": 60,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3061": {
+      "id": "N3061",
+      "node": "nodo3",
+      "index": 61,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3062": {
+      "id": "N3062",
+      "node": "nodo3",
+      "index": 62,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3063": {
+      "id": "N3063",
+      "node": "nodo3",
+      "index": 63,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3064": {
+      "id": "N3064",
+      "node": "nodo3",
+      "index": 64,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3065": {
+      "id": "N3065",
+      "node": "nodo3",
+      "index": 65,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3066": {
+      "id": "N3066",
+      "node": "nodo3",
+      "index": 66,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3067": {
+      "id": "N3067",
+      "node": "nodo3",
+      "index": 67,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3068": {
+      "id": "N3068",
+      "node": "nodo3",
+      "index": 68,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3069": {
+      "id": "N3069",
+      "node": "nodo3",
+      "index": 69,
+      "status": "free",
+      "primary_for": null
+    },
+    "N3070": {
+      "id": "N3070",
+      "node": "nodo3",
+      "index": 70,
+      "status": "free",
+      "primary_for": null
     }
   },
-  "table_size": 140
+  "table_size": 210
 }

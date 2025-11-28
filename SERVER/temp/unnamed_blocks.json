@@ -1,0 +1,13 @@
+{
+  "original_filename": "unnamed.jpg",
+  "total_blocks": 1,
+  "total_size": 303268,
+  "blocks": [
+    {
+      "block_name": "unnamed.part001",
+      "size": 303268,
+      "path": "C:\\Users\\Eduar\\Documents\\Universidad\\TAREAS\\SEMESTRE_7\\Sistemas_operativos_2\\Proyecto_final\\SADTF_2\\SERVER\\temp\\unnamed.part001",
+      "index": 1
+    }
+  ]
+}

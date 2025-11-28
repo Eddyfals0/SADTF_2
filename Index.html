@@ -375,22 +375,10 @@
                 btn.classList.replace('border-green-500', 'border-red-500');
                 btnText.innerText = "Conectar";
 
-                // Actualizar interfaz: marcar el nodo como 'offline' en lugar de eliminar la fila
-                if (disconnectedId) {
-                    const idx = nodesData.findIndex(n => n.id === disconnectedId || n.node_id === disconnectedId || n.node === disconnectedId);
-                    if (idx !== -1) {
-                        nodesData[idx].status = 'offline';
-                        // Mantener capacity/used para mostrar en la tabla (renderNodes lo respetará)
-                        log(`Nodo ${disconnectedId} marcado como OFFLINE en la interfaz.`);
-                        renderNodes();
-                    } else {
-                        // Si no existe en nodesData, puede que el coordinador lo haya eliminado permanentemente
-                        // En ese caso, dejar que startPolling decida su desaparición; como fallback limpiamos la tabla
-                        document.getElementById('nodesTableBody').innerHTML = '';
-                    }
-                } else {
-                    document.getElementById('nodesTableBody').innerHTML = '';
-                }
+                // Como me estoy desconectando YO (nodo local), limpiar toda la tabla
+                // Para otros clientes, startPolling traerá la lista con este nodo marcado OFFLINE
+                document.getElementById('nodesTableBody').innerHTML = '';
+                log(`Tabla de nodos limpiada (desconexión local).`);
 
                 // Mantener la lista de archivos local pero indicar desconexión
                 document.getElementById('fileListContainer').innerHTML = '<div class="text-center text-slate-500 mt-10 italic">Desconectado.</div>';
@@ -634,7 +622,9 @@
 
                 if (nodeOffline || status === 'unavailable') {
                     div.classList.add('block-unavailable');
-                    div.title = `Bloque ${b.id} - ${nodeId} (NO DISPONIBLE)`;
+                    // Aplicar mayor transparencia a bloques de nodos offline
+                    div.style.opacity = '0.25';
+                    div.title = `Bloque ${b.id} - ${nodeId} (NO DISPONIBLE - Nodo offline)`;
                 } else if (status === 'free') {
                     div.classList.add('block-free');
                     div.title = `Bloque ${b.id} - ${nodeId} (Libre)`;
