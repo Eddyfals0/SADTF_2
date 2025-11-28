@@ -5,6 +5,11 @@ import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+from io import BytesIO
+import node_manager
+import blocks_manager
+import files_manager
+import partitioner
 
 # --- Configuración ---
 COORD_HOST = "0.0.0.0"   # Escucha en todas las interfaces de red
@@ -16,7 +21,14 @@ HTTP_PORT = 8000        # Puerto HTTP para API (UI)
 nodos_registrados = {}
 conexiones_activas = {}  # node_id -> socket conexión TCP
 last_pong = {}  # node_id -> timestamp del último PONG recibido
-nodes_persistent_file = os.path.join(os.path.dirname(__file__), 'nodes_data.json')
+nodes_persistent_file = os.path.join(os.path.dirname(__file__), 'info', 'nodes_data.json')
+blocks_persistent_file = os.path.join(os.path.dirname(__file__), 'info', 'blocks_data.json')
+
+# Tabla de bloques global
+blocks_store = {}
+
+# Índice persistente de archivos subidos
+files_store = {'files': {}}
 
 # Contador simple para generar nombres nodo1, nodo2, nodo3, ...
 next_node_number = 1
@@ -38,6 +50,90 @@ def obtener_ip_servidor():
     finally:
         s.close()
     return ip
+
+
+# Delegar funciones de persistencia y gestión a módulos
+def load_persistent_nodes():
+    """Wrapper que usa node_manager para obtener nodos persistentes y actualiza el estado local."""
+    try:
+        data = node_manager.load_persistent_nodes()
+        with lock_nodos:
+            nodos_registrados.update(data or {})
+        # Ajustar next_node_number para evitar colisiones
+        global next_node_number
+        try:
+            next_node_number = node_manager.compute_next_node_number(nodos_registrados)
+        except Exception:
+            pass
+        print(f"[NODE_MANAGER] Cargados {len(nodos_registrados)} nodos persistentes")
+    except Exception as e:
+        print(f"[NODE_MANAGER] Error cargando nodos: {e}")
+
+
+def save_persistent_nodes():
+    """Wrapper que delega a node_manager para guardar nodos persistentes."""
+    try:
+        node_manager.save_persistent_nodes(nodos_registrados)
+    except Exception as e:
+        print(f"[NODE_MANAGER] Error guardando nodos: {e}")
+
+
+# Delegar funciones de bloques
+load_persistent_blocks = blocks_manager.load_persistent_blocks
+save_persistent_blocks = blocks_manager.save_persistent_blocks
+update_blocks_for_node = blocks_manager.update_blocks_for_node
+set_node_blocks_unavailable = blocks_manager.set_node_blocks_unavailable
+set_node_blocks_available = blocks_manager.set_node_blocks_available
+raw_blocks_to_ui = blocks_manager.raw_to_ui_struct
+
+
+def split_file_to_blocks(file_data, dest_dir, block_size=1024*1024):
+    """
+    Divide un archivo en bloques de 1MB y los guarda en dest_dir.
+    Retorna metadata con la lista de bloques creados.
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+    
+    # Obtener nombre original
+    filename = getattr(file_data, 'filename', 'archivo') if hasattr(file_data, 'filename') else 'archivo'
+    
+    blocks = []
+    block_index = 0
+    total_size = 0
+    
+    while True:
+        chunk = file_data.read(block_size)
+        if not chunk:
+            break
+        
+        block_index += 1
+        block_name = f"{os.path.splitext(filename)[0]}.part{block_index:03d}"
+        block_path = os.path.join(dest_dir, block_name)
+        
+        with open(block_path, 'wb') as f:
+            f.write(chunk)
+        
+        total_size += len(chunk)
+        blocks.append({
+            'block_name': block_name,
+            'size': len(chunk),
+            'path': block_path,
+            'index': block_index
+        })
+    
+    # Guardar metadata
+    metadata = {
+        'original_filename': filename,
+        'total_blocks': block_index,
+        'total_size': total_size,
+        'blocks': blocks
+    }
+    
+    metadata_path = os.path.join(dest_dir, f"{os.path.splitext(filename)[0]}_blocks.json")
+    with open(metadata_path, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f, indent=2)
+    
+    return metadata
 
 
 def discovery_server():
@@ -188,6 +284,10 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        try:
+            client_ip = self.client_address[0]
+        except Exception:
+            client_ip = 'unknown'
         if path == '/discover':
             # Reusar node_id si existe registro para esta IP
             client_ip = self.client_address[0]
@@ -235,6 +335,43 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                         continue
                     nodes_list.append({'id': nid, 'ip': info.get('ip'), 'port': info.get('port'), 'capacity': info.get('capacity', 0), 'status': status, 'used': info.get('used', 0)})
             self._send_json({'nodes': nodes_list})
+        elif path == '/whoami':
+            # Devuelve la IP del cliente y si está asociado a un nodo conocido
+            try:
+                node_id = None
+                node_status = None
+                with lock_nodos:
+                    for nid, info in nodos_registrados.items():
+                        if info.get('ip') == client_ip:
+                            node_id = nid
+                            node_status = info.get('status')
+                            break
+                resp = {'ip': client_ip, 'node_id': node_id, 'node_status': node_status, 'editable': (node_status == 'online')}
+                self._send_json(resp)
+            except Exception as e:
+                print(f"[HTTP] Error en /whoami: {e}")
+                self._send_json({'ip': client_ip, 'node_id': None, 'node_status': None, 'editable': False})
+        elif path == '/blocks':
+            # Devuelve la tabla de bloques global
+            try:
+                with lock_nodos:
+                    bd = blocks_store
+                    # Convertir a formato UI si es necesario
+                    blocks_list = list(bd.get('blocks', {}).values())
+                    table_size = bd.get('table_size', 0)
+                self._send_json({'table_size': table_size, 'blocks': blocks_list})
+            except Exception as e:
+                print(f"[HTTP] Error devolviendo /blocks: {e}")
+                self._send_json({'table_size': 0, 'blocks': []})
+        elif path == '/files':
+            # Devuelve el índice persistente de archivos subidos
+            try:
+                with lock_nodos:
+                    fs = files_store
+                self._send_json(fs)
+            except Exception as e:
+                print(f"[HTTP] Error devolviendo /files: {e}")
+                self._send_json({'files': {}})
         else:
             self._send_json({'error': 'Not found'}, status=404)
 
@@ -253,9 +390,132 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
             client_ip = self.client_address[0]
         except Exception:
             client_ip = 'unknown'
-        print(f"[HTTP] do_POST {path} desde {client_ip} body={data}")
+        print(f"[HTTP] do_POST {path} desde {client_ip}")
 
-        if path == '/register':
+        if path == '/upload':
+            # Endpoint para recibir archivos y dividirlos en bloques
+            # Detectar si es multipart/form-data
+            # Bloquear uploads si la IP cliente corresponde a un nodo desconectado
+            try:
+                with lock_nodos:
+                    for nid, info in nodos_registrados.items():
+                        if info.get('ip') == client_ip and info.get('status') != 'online':
+                            self._send_json({'status': 'ERROR', 'message': 'Nodo desconectado: no se permiten subidas/ modificaciones'}, status=403)
+                            return
+            except Exception:
+                pass
+            content_type = self.headers.get('Content-Type', '')
+            if 'multipart/form-data' not in content_type:
+                self._send_json({'status': 'ERROR', 'message': 'Expected multipart/form-data'}, status=400)
+                return
+            
+            try:
+                # Parsear multipart (forma simple sin librerías externas)
+                boundary = content_type.split('boundary=')[1].encode()
+                parts = body.split(b'--' + boundary)
+                
+                file_data = None
+                filename = 'archivo'
+                
+                for part in parts:
+                    if b'filename=' in part:
+                        # Extraer nombre del archivo
+                        try:
+                            fn_start = part.find(b'filename="') + 10
+                            fn_end = part.find(b'"', fn_start)
+                            filename = part[fn_start:fn_end].decode('utf-8')
+                        except Exception:
+                            pass
+                        
+                        # Extraer contenido del archivo
+                        content_start = part.find(b'\r\n\r\n') + 4
+                        content_end = part.rfind(b'\r\n')
+                        file_data = part[content_start:content_end]
+                        break
+                
+                if not file_data:
+                    self._send_json({'status': 'ERROR', 'message': 'No file data found'}, status=400)
+                    return
+                
+                # Crear objeto similar a FileStorage para split_file_to_blocks
+                from io import BytesIO
+                file_obj = BytesIO(file_data)
+                file_obj.filename = filename
+                
+                # Dividir en bloques
+                temp_dir = os.path.join(os.path.dirname(__file__), 'temp')
+                metadata = split_file_to_blocks(file_obj, temp_dir, block_size=1024*1024)
+                
+                # Determinar uploader (si existe un nodo con esta IP)
+                uploader_node = None
+                with lock_nodos:
+                    for nid, info in nodos_registrados.items():
+                        if info.get('ip') == client_ip:
+                            uploader_node = nid
+                            break
+
+                # Crear file_id
+                file_id = f"file_{int(time.time()*1000)}_{os.path.splitext(filename)[0]}"
+
+                # Calcular placements usando el Partitioner (no persiste cambios)
+                try:
+                    part = partitioner.Partitioner(replication=2)
+                    ok, placements, msg = part.allocate_blocks_for_file(metadata.get('total_blocks', 0), nodos_registrados, blocks_store)
+                    if not ok:
+                        # No hay recursos para asignar réplicas/primarios
+                        self._send_json({'status': 'ERROR', 'message': f'No se pudo asignar bloques: {msg}'}, status=500)
+                        return
+                except Exception as e:
+                    print(f"[PARTITION] Error calculando placements: {e}")
+                    self._send_json({'status': 'ERROR', 'message': 'Error interno en particionador'}, status=500)
+                    return
+
+                # Aplicar las asignaciones a la tabla global de bloques (persistir cambios)
+                try:
+                    changed = assign_blocks_to_file(blocks_store, file_id, placements)
+                    if changed:
+                        save_persistent_blocks(blocks_store)
+                except Exception as e:
+                    print(f"[BLOCKS] Error asignando bloques: {e}")
+                    self._send_json({'status': 'ERROR', 'message': 'Error asignando bloques en tabla global'}, status=500)
+                    return
+
+                # Registrar metadatos del archivo en el índice persistente de archivos (incluye placements)
+                try:
+                    entry = {
+                        'file_id': file_id,
+                        'original_filename': filename,
+                        'uploader_node': uploader_node,
+                        'uploaded_at': time.time(),
+                        'meta': metadata,
+                        'placements': placements
+                    }
+                    with lock_nodos:
+                        files_store['files'][file_id] = entry
+                    try:
+                        files_manager.save_persistent_files(files_store)
+                    except Exception as e:
+                        print(f"[FILES] Error guardando metadatos de archivo: {e}")
+                except Exception as e:
+                    print(f"[FILES] Error registrando archivo en índice persistente: {e}")
+
+                # No crear nuevas entradas en la tabla global de bloques aquí.
+                # Guardamos los bloques en disco (split_file_to_blocks ya guardó metadata)
+                # y devolvemos la metadata al cliente. La asignación a nodos
+                # deberá realizarse mediante la lógica de asignación cuando existan nodos.
+                print(f"[HTTP] Archivo '{filename}' dividido en {metadata['total_blocks']} bloques (guardados en temp)")
+                self._send_json({
+                    'status': 'ok',
+                    'meta': metadata,
+                    'message': f'Archivo dividido en {metadata["total_blocks"]} bloques'
+                })
+                
+            except Exception as e:
+                print(f"[HTTP] Error procesando /upload: {e}")
+                self._send_json({'status': 'ERROR', 'message': str(e)}, status=500)
+                return
+
+        elif path == '/register':
             node_id = data.get('node_id')
             capacity = data.get('capacity', 0)
             client_ip = self.client_address[0]
@@ -264,7 +524,15 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                 return
             with lock_nodos:
                 nodos_registrados[node_id] = {'ip': client_ip, 'port': COORD_PORT, 'capacity': capacity, 'status': 'online', 'used': 0, 'last_seen': time.time()}
+                # Actualizar bloques globales para este nodo
+                try:
+                    update_blocks_for_node(node_id, capacity, blocks_store)
+                    # Si el nodo está online, asegurar que sus bloques están disponibles
+                    set_node_blocks_available(node_id, blocks_store)
+                except Exception as e:
+                    print(f"[BLOCKS] Error al actualizar bloques en /register: {e}")
             save_persistent_nodes()
+            save_persistent_blocks(blocks_store)
             print(f"[HTTP] Nodo registrado via HTTP: {node_id} -> {client_ip} cap={capacity}")
 
             # Notificar a nodos TCP activos que un nuevo nodo se registró via API
@@ -621,12 +889,35 @@ def tcp_server():
 
 
 def main():
+    global blocks_store
+    
     # Hilo para el servidor UDP (discovery)
     hilo_discovery = threading.Thread(target=discovery_server, daemon=True)
     hilo_discovery.start()
 
     # Cargar nodos persistentes
     load_persistent_nodes()
+    # Cargar índice persistente de archivos
+    try:
+        global files_store
+        files_store = files_manager.load_persistent_files() or {'files': {}}
+        print(f"[FILES] Cargados {len(files_store.get('files', {}))} archivos persistentes")
+    except Exception as e:
+        print(f"[FILES] Error cargando índice de archivos persistentes: {e}")
+    
+    # Cargar bloques persistentes
+    blocks_store = load_persistent_blocks()
+    
+    # Sincronizar bloques con nodos cargados
+    try:
+        with lock_nodos:
+            for nid, info in nodos_registrados.items():
+                cap = info.get('capacity', 0) or 0
+                update_blocks_for_node(nid, cap, blocks_store)
+                set_node_blocks_available(nid, blocks_store)
+        save_persistent_blocks(blocks_store)
+    except Exception as e:
+        print(f"[BLOCKS] Error sincronizando bloques después de cargar nodos: {e}")
 
     # Hilo para servidor HTTP (API)
     hilo_http = threading.Thread(target=start_http_server, daemon=True)

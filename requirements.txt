@@ -5,5 +5,7 @@
 # Versión mínima de Python recomendada
 python>=3.10
 
-# Dependencias externas (ninguna por ahora)
-# requests==2.31.0   # ejemplo: descomenta si usas requests
+# Dependencias externas
+requests==2.31.0       # Para enviar block info al coordinador desde el cliente
+flask==3.1.2          # Backend Flask para file upload processing
+flask-cors==4.0.0     # CORS support para Flask

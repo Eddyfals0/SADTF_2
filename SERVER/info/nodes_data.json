@@ -4,9 +4,9 @@
       "ip": "127.0.0.1",
       "port": 5000,
       "capacity": 70,
-      "status": "online",
+      "status": "offline",
       "used": 0,
-      "last_seen": 1764284063.031597
+      "last_seen": 1764309534.6791322
     }
   }
 }

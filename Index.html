@@ -40,8 +40,10 @@
         }
         .memory-block:hover { transform: scale(1.5); z-index: 10; cursor: help; }
         .block-free { background-color: #334155; }
-        .block-used { background-color: #3b82f6; border: 1px solid #60a5fa; }
-        .block-replica { background-color: #a855f7; border: 1px solid #c084fc; }
+        /* Primary ocupado = verde, Replica = rojo, libre = gris */
+        .block-used { background-color: #16a34a; border: 1px solid #4ade80; }
+        .block-replica { background-color: #dc2626; border: 1px solid #f87171; }
+        .block-unavailable { background-color: #334155; opacity: 0.18; filter: grayscale(100%); }
     </style>
 </head>
 <body class="bg-slate-900 text-slate-200 h-screen flex flex-col overflow-hidden">
@@ -91,11 +93,14 @@
         <section class="w-full md:w-1/2 flex flex-col border-r border-slate-700 bg-slate-800/50 p-4">
             
             <!-- Área de Carga -->
-            <div class="mb-4 p-6 border-2 border-dashed border-slate-600 rounded-xl bg-slate-800/80 flex flex-col items-center justify-center hover:border-blue-500 transition-colors cursor-pointer group" onclick="document.getElementById('fileInput').click()">
+            <div class="mb-4 p-6 border-2 border-dashed border-slate-600 rounded-xl bg-slate-800/80 flex flex-col items-center justify-center hover:border-blue-500 transition-colors cursor-pointer group" onclick="triggerFileInput()">
                 <input type="file" id="fileInput" class="hidden" onchange="handleFileUpload(this)">
                 <i class="fa-solid fa-cloud-arrow-up text-3xl text-slate-500 group-hover:text-blue-400 mb-2 transition-colors"></i>
                 <h3 class="font-semibold text-slate-300">Subir Archivo al Sistema Distribuido</h3>
                 <p class="text-xs text-slate-500 mt-1">Soporta IMG, VID, PDF. (Se dividirá en bloques de 1MB)</p>
+            </div>
+            <div id="offlineBanner" class="mb-4 p-3 rounded text-sm bg-red-800 text-red-200 hidden">
+                <i class="fa-solid fa-lock mr-2"></i>Tu nodo está OFFLINE: no se permiten cargas ni modificaciones.
             </div>
 
             <!-- Lista de Archivos -->
@@ -168,8 +173,8 @@
                         <h3 class="text-white font-semibold mb-4 text-sm">Mapa de Distribución de Bloques (1MB c/u)</h3>
                         <div class="flex gap-4 mb-4 text-xs">
                             <div class="flex items-center gap-1"><div class="w-3 h-3 bg-slate-600 rounded"></div> Libre</div>
-                            <div class="flex items-center gap-1"><div class="w-3 h-3 bg-blue-500 border border-blue-400 rounded"></div> Original</div>
-                            <div class="flex items-center gap-1"><div class="w-3 h-3 bg-purple-500 border border-purple-400 rounded"></div> Réplica</div>
+                            <div class="flex items-center gap-1"><div class="w-3 h-3 bg-green-500 border border-green-400 rounded"></div> Principal</div>
+                            <div class="flex items-center gap-1"><div class="w-3 h-3 bg-red-500 border border-red-400 rounded"></div> Réplica</div>
                         </div>
                         
                         <!-- Grid de bloques -->
@@ -224,11 +229,14 @@
         // Mock data para simular backend
         let systemFiles = [];
         let nodesData = [];
+        let blocksData = { table_size: 0, blocks: [] };
 
         // --- FUNCIONES DE INICIALIZACIÓN ---
         
         function init() {
             log("Interfaz inicializada. Listo para conectar.");
+            // Comprobar estado local respecto al coordinador (si corresponde)
+            try { checkWhoami(); } catch (e) { /* ignore */ }
         }
 
         // --- LÓGICA DE CONEXIÓN ---
@@ -312,6 +320,8 @@
 
                     // iniciar polling cada 2s
                     await startPolling(apiBase);
+                    // actualizar permisos según estado del nodo (whoami)
+                    try { await checkWhoami(); } catch (e) { /* ignore */ }
                     pollInterval = setInterval(() => startPolling(apiBase), 2000);
 
                 } catch (err) {
@@ -332,6 +342,7 @@
 
             } else {
                     // Antes de limpiar la UI, avisar al servidor que nos desconectamos
+                    const disconnectedId = clientId; // conservar antes de resetear
                     try {
                         if (clientId && apiBaseGlobal) {
                             await fetch(apiBaseGlobal + '/disconnect', {
@@ -364,13 +375,31 @@
                 btn.classList.replace('border-green-500', 'border-red-500');
                 btnText.innerText = "Conectar";
 
-                // Limpiar interfaz
+                // Actualizar interfaz: marcar el nodo como 'offline' en lugar de eliminar la fila
+                if (disconnectedId) {
+                    const idx = nodesData.findIndex(n => n.id === disconnectedId || n.node_id === disconnectedId || n.node === disconnectedId);
+                    if (idx !== -1) {
+                        nodesData[idx].status = 'offline';
+                        // Mantener capacity/used para mostrar en la tabla (renderNodes lo respetará)
+                        log(`Nodo ${disconnectedId} marcado como OFFLINE en la interfaz.`);
+                        renderNodes();
+                    } else {
+                        // Si no existe en nodesData, puede que el coordinador lo haya eliminado permanentemente
+                        // En ese caso, dejar que startPolling decida su desaparición; como fallback limpiamos la tabla
+                        document.getElementById('nodesTableBody').innerHTML = '';
+                    }
+                } else {
+                    document.getElementById('nodesTableBody').innerHTML = '';
+                }
+
+                // Mantener la lista de archivos local pero indicar desconexión
                 document.getElementById('fileListContainer').innerHTML = '<div class="text-center text-slate-500 mt-10 italic">Desconectado.</div>';
-                document.getElementById('nodesTableBody').innerHTML = '';
                 document.getElementById('blocksGrid').innerHTML = '';
                 updateStorageBar(0, 100);
                 
                 log("Desconectado del sistema.");
+                // refrescar whoami para reflejar que ya no somos editable
+                try { checkWhoami(); } catch (e) { /* ignore */ }
             }
         }
 
@@ -415,11 +444,84 @@
                 // data: { nodes: [...] }
                 nodesData = (data && data.nodes) ? data.nodes.map(n => ({ id: n.id || n.node_id || n.node, ip: n.ip, status: n.status || 'unknown', capacity: n.capacity || n.capacity || 0, used: n.used || 0 })) : [];
                 renderNodes();
+                // Obtener tabla de bloques
+                try {
+                    const bres = await fetch(apiBase + '/blocks');
+                    if (bres.ok) {
+                        const bjson = await bres.json();
+                        blocksData = bjson || { table_size: 0, blocks: [] };
+                    } else {
+                        blocksData = { table_size: 0, blocks: [] };
+                    }
+                } catch (err) {
+                    console.warn('Error fetching blocks:', err);
+                    blocksData = { table_size: 0, blocks: [] };
+                }
+                renderBlocksMap();
+                // Obtener índice de archivos persistentes y renderizar
+                try {
+                    const fres = await fetch(apiBase + '/files');
+                    if (fres.ok) {
+                        const fjson = await fres.json();
+                        // fjson expected: { files: { file_id: { original_filename, uploaded_at, meta, uploader_node } } }
+                        const filesObj = fjson && fjson.files ? fjson.files : {};
+                        // Convertir a array para renderizar
+                        systemFiles = Object.values(filesObj).map(f => {
+                            const name = f.original_filename || ('file_' + (f.file_id || ''));
+                            const uploadedAt = f.uploaded_at ? new Date(f.uploaded_at * 1000) : new Date();
+                            const meta = f.meta || {};
+                            const sizeBytes = meta.total_size || 0;
+                            const tipo = name.match(/\.(jpg|jpeg|png|gif|svg)$/i) ? 'img' : (name.match(/\.(mp4|mov|mkv|webm)$/i) ? 'vid' : 'doc');
+                            return {
+                                name: name,
+                                date: uploadedAt.toLocaleDateString(),
+                                size: (Math.round(sizeBytes/1024)) + ' KB',
+                                type: tipo,
+                                blocks: meta.total_blocks || 0,
+                                url: '#',
+                                _raw: f
+                            };
+                        });
+                    }
+                } catch (err) {
+                    console.warn('Error fetching files index:', err);
+                }
+                renderFiles();
             } catch (e) {
                 console.error('startPolling error', e);
                 const tbody = document.getElementById('nodesTableBody');
                 tbody.innerHTML = '<tr><td colspan="4" class="px-4 py-3 text-slate-500">Error al obtener nodos desde el coordinador</td></tr>';
             }
+        }
+
+        // --- Control de permisos según estado del nodo local ---
+        let canModify = true;
+
+        async function checkWhoami() {
+            try {
+                const res = await fetch((apiBaseGlobal || 'http://localhost:8000') + '/whoami');
+                if (!res.ok) return;
+                const j = await res.json();
+                if (j && j.node_status && j.node_status !== 'online') {
+                    canModify = false;
+                    document.getElementById('fileInput').disabled = true;
+                    document.getElementById('offlineBanner').classList.remove('hidden');
+                } else {
+                    canModify = true;
+                    document.getElementById('fileInput').disabled = false;
+                    document.getElementById('offlineBanner').classList.add('hidden');
+                }
+            } catch (e) {
+                console.warn('whoami error', e);
+            }
+        }
+
+        function triggerFileInput() {
+            if (!canModify) {
+                alert('No puedes subir archivos: el nodo local está OFFLINE.');
+                return;
+            }
+            document.getElementById('fileInput').click();
         }
 
         // --- RENDERIZADO DE UI ---
@@ -504,61 +606,110 @@
         }
 
         function renderBlocksMap() {
-            // Visualización de la tabla de bloques (PDF Pag 1)
             const grid = document.getElementById('blocksGrid');
             grid.innerHTML = '';
 
-            // Generar 100 bloques simulados para mostrar distribución
-            for(let i=0; i<120; i++) {
+            // Si no hay datos reales, mostrar vacío o fallback
+            if (!blocksData || !blocksData.blocks || blocksData.blocks.length === 0) {
+                // Fallback: mostrar mensaje
+                const empty = document.createElement('div');
+                empty.className = 'text-slate-500 p-4';
+                empty.innerText = 'No hay información de bloques disponible.';
+                grid.appendChild(empty);
+                return;
+            }
+
+            // Crear bloques según blocksData (ya deberían estar ordenados por id/index)
+            blocksData.blocks.forEach(b => {
                 const div = document.createElement('div');
                 div.className = 'memory-block';
-                div.title = `Bloque ID: ${i}`;
-                
-                // Simular estado al azar
-                const rand = Math.random();
-                if(rand > 0.8) {
-                    div.classList.add('block-used');
-                    div.title += " (Ocupado - Archivo A)";
-                } else if (rand > 0.6) {
-                    div.classList.add('block-replica');
-                    div.title += " (Réplica - Archivo B)";
-                } else {
+                const nodeId = b.node;
+                let status = b.status || 'free';
+
+                // Si el nodo está offline en nodesData, marcar como unavailable
+                const nodeEntry = nodesData.find(n => n.id === nodeId || n.node_id === nodeId || n.node === nodeId || (n.id && n.id.toLowerCase() === nodeId.toLowerCase()));
+                const nodeOffline = nodeEntry ? (nodeEntry.status !== 'online') : false;
+
+                if (nodeOffline || status === 'unavailable') {
+                    div.classList.add('block-unavailable');
+                    div.title = `Bloque ${b.id} - ${nodeId} (NO DISPONIBLE)`;
+                } else if (status === 'free') {
                     div.classList.add('block-free');
-                    div.title += " (Libre)";
+                    div.title = `Bloque ${b.id} - ${nodeId} (Libre)`;
+                } else if (status === 'replica') {
+                    div.classList.add('block-replica');
+                    div.title = `Bloque ${b.id} - ${nodeId} (Réplica)`;
+                } else if (status === 'occupied' || b.primary_for) {
+                    div.classList.add('block-used');
+                    div.title = `Bloque ${b.id} - ${nodeId} (Principal)`;
+                } else {
+                    // unknown -> mostrar libre
+                    div.classList.add('block-free');
+                    div.title = `Bloque ${b.id} - ${nodeId} (${status})`;
                 }
+
                 grid.appendChild(div);
-            }
+            });
         }
 
         // --- INTERACCIONES DE ARCHIVOS ---
 
         function handleFileUpload(input) {
-            if (!isConnected) { alert("Debes conectar primero."); return; }
+            if (!canModify) { alert('No puedes subir archivos: el nodo local está OFFLINE.'); return; }
             const file = input.files[0];
-            if (file) {
-                log(`Iniciando subida: ${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`);
-                log(`> Dividiendo en bloques de 1MB...`);
-                log(`> Distribuyendo bloques entre Nodos 1, 2 y 4...`);
-                
-                // Simular proceso de carga
-                setTimeout(() => {
-                    const type = file.type.startsWith('image') ? 'img' : (file.type.startsWith('video') ? 'vid' : 'doc');
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            log(`Iniciando subida: ${file.name} (${(file.size/1024/1024).toFixed(2)} MB)`);
+            log(`> Enviando archivo al coordinador para dividir en bloques de 1MB...`);
+
+            // Enviar al endpoint /upload en el coordinador (puerto 8000)
+            fetch('http://localhost:8000/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    const meta = data.meta || {};
+                    const tipo = file.type.startsWith('image') ? 'img' : (file.type.startsWith('video') ? 'vid' : 'doc');
+                    
                     const newFile = {
                         name: file.name,
                         date: new Date().toLocaleDateString(),
                         size: (file.size/1024).toFixed(0) + " KB",
-                        type: type,
-                        url: URL.createObjectURL(file) // Para previsualización local
+                        type: tipo,
+                        blocks: meta.total_blocks || 0,
+                        url: URL.createObjectURL(file)
                     };
                     systemFiles.push(newFile);
                     renderFiles();
-                    log(`Archivo guardado exitosamente: ${file.name}`);
-                    renderBlocksMap(); // Actualizar mapa de bloques
-                }, 1000);
-            }
+                    
+                    log(`✓ Archivo dividido exitosamente en ${meta.total_blocks} bloques de 1MB`);
+                    log(`> Bloques guardados en SERVER/temp/`);
+                    log(`✓ Info de bloques registrada en el coordinador`);
+                    
+                    // Mostrar lista de bloques
+                    if (meta.blocks && Array.isArray(meta.blocks)) {
+                        meta.blocks.forEach(b => {
+                            log(`  - ${b.block_name} (${b.size} bytes)`);
+                        });
+                    }
+                } else {
+                    log(`✗ Error: ${data.mensaje || 'Error desconocido en servidor'}`);
+                    alert('Error al subir archivo: ' + (data.mensaje || 'Desconocido'));
+                }
+            })
+            .catch(err => {
+                log(`✗ Error de red: ${err.message}`);
+                alert('Error al subir archivo: ' + err.message);
+            });
         }
 
         function deleteFile(index) {
+            if (!canModify) { alert('No puedes modificar archivos: el nodo local está OFFLINE.'); return; }
             if(confirm("¿Eliminar archivo y liberar sus bloques en todos los nodos?")) {
                 const name = systemFiles[index].name;
                 log(`Solicitando eliminación de ${name}...`);
