@@ -135,6 +135,30 @@ def escuchar_mensajes():
                                         coord_socket.sendall(json.dumps(ack).encode())
                             except Exception:
                                 pass
+                elif msg_type == 'REQUEST_BLOCK':
+                    # El coordinador solicita que enviemos un bloque específico
+                    try:
+                        block_id = msg.get('block_id')
+                        block_name = msg.get('block_name')
+                        if block_name:
+                            base_dir = os.path.join(os.path.expanduser('~'), 'espacioCompartido', node_id)
+                            path = os.path.join(base_dir, block_name)
+                            if os.path.exists(path):
+                                with open(path, 'rb') as bf:
+                                    data = bf.read()
+                                b64 = base64.b64encode(data).decode('ascii')
+                                resp = {'type': 'BLOCK_DATA', 'block_id': block_id, 'data_b64': b64}
+                            else:
+                                resp = {'type': 'BLOCK_DATA', 'block_id': block_id, 'error': 'not_found'}
+                            with lock_socket:
+                                if coord_socket:
+                                    coord_socket.sendall(json.dumps(resp).encode())
+                    except Exception as e:
+                        print(f"[CLIENT] Error procesando REQUEST_BLOCK: {e}")
+                elif msg_type == 'BLOCK_DATA':
+                    # Mensaje con datos de bloque en respuesta a una request (puede ignorarse en cliente)
+                    # El coordinador procesará esto; los nodos usualmente no procesan BLOCK_DATA.
+                    pass
                     except Exception as e:
                         print(f"[CLIENT] Error procesando STORE_BLOCK: {e}")
                 elif msg_type == "NODE_CONNECTED":

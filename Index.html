@@ -697,6 +697,8 @@
                     };
                     systemFiles.push(newFile);
                     renderFiles();
+                    // refrescar estado (nodos/blocks/storage)
+                    try { startPolling(apiBaseGlobal); } catch (e) { console.warn('refresh after upload failed', e); }
                     
                     log(`✓ Archivo dividido exitosamente en ${meta.total_blocks} bloques de 1MB`);
                     log(`> Bloques guardados en SERVER/temp/`);
@@ -760,8 +762,36 @@
         }
 
         function downloadFile(name) {
-            log(`Descargando ${name}... Recopilando bloques de nodos disponibles.`);
-            alert(`Descarga simulada de: ${name}\nEl sistema reconstruyó el archivo desde los nodos distribuidos.`);
+            log(`Descargando ${name}... solicitando al coordinador la reconstrucción.`);
+            // Buscar archivo en systemFiles por nombre
+            const fileEntry = systemFiles.find(f => f.name === name);
+            if (!fileEntry || !fileEntry._raw || !fileEntry._raw.file_id) {
+                alert('No se encontró el archivo en el servidor para descargar.');
+                return;
+            }
+            const fileId = fileEntry._raw.file_id;
+            const downloadUrl = (apiBaseGlobal || 'http://localhost:8000') + '/files/download?file_id=' + encodeURIComponent(fileId);
+            fetch(downloadUrl)
+            .then(res => {
+                if (!res.ok) throw new Error('Descarga falló');
+                return res.blob();
+            })
+            .then(blob => {
+                // Crear enlace temporal para forzar descarga en carpeta Descargas del usuario
+                const a = document.createElement('a');
+                const url = URL.createObjectURL(blob);
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+                log(`Descarga iniciada: ${name}`);
+            })
+            .catch(err => {
+                console.error('download error', err);
+                alert('Error al descargar: ' + err.message);
+            });
         }
 
         function viewFile(index) {

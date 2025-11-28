@@ -31,6 +31,10 @@ blocks_store = {}
 # Índice persistente de archivos subidos
 files_store = {'files': {}}
 
+# Estructura para esperar respuestas de bloques solicitados a nodos
+pending_block_responses = {}  # (node_id, block_id) -> {'event': Event, 'data': bytes or None, 'error': str or None}
+pending_lock = threading.Lock()
+
 # Contador simple para generar nombres nodo1, nodo2, nodo3, ...
 next_node_number = 1
 lock_nodos = threading.Lock()   # Para modificar contador/tablas de forma segura
@@ -263,6 +267,49 @@ def _broadcast_event(event_obj, exclude_node=None):
         save_persistent_nodes()
 
 
+def request_block_from_node(node_id, block_id, block_name=None, timeout=6):
+    """
+    Solicita a un nodo conectado que envíe un bloque (por nombre). Espera respuesta BLOCK_DATA.
+    Retorna bytes o None si fallo.
+    """
+    key = (node_id, block_id)
+    ev = threading.Event()
+    with pending_lock:
+        pending_block_responses[key] = {'event': ev, 'data': None, 'error': None}
+
+    # Construir mensaje
+    msg = {'type': 'REQUEST_BLOCK', 'block_id': block_id, 'block_name': block_name}
+    sent = False
+    try:
+        with lock_nodos:
+            sock = conexiones_activas.get(node_id)
+            if not sock:
+                return None
+            sock.sendall(json.dumps(msg).encode())
+            sent = True
+    except Exception as e:
+        print(f"[REQUEST_BLOCK] Error enviando request a {node_id}: {e}")
+
+    # esperar respuesta
+    if not sent:
+        with pending_lock:
+            try:
+                del pending_block_responses[key]
+            except Exception:
+                pass
+        return None
+
+    ev.wait(timeout)
+    with pending_lock:
+        res = pending_block_responses.pop(key, None)
+
+    if not res:
+        return None
+    if res.get('error'):
+        return None
+    return res.get('data')
+
+
 def save_persistent_nodes():
     try:
         with lock_nodos:
@@ -289,6 +336,7 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        query = parsed.query
         try:
             client_ip = self.client_address[0]
         except Exception:
@@ -435,6 +483,82 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                 self._send_json({'total_capacity_mb': 0, 'used_bytes': 0, 'used_mb': 0, 'percent': 0})
         else:
             self._send_json({'error': 'Not found'}, status=404)
+
+        # Manejar descarga de archivo en ruta especializada (query parsing)
+        # Soporte: /files/download?file_id=...
+        # Nota: no se entra aquí si ya se respondió arriba.
+        if path.startswith('/files/download'):
+            # extraer file_id
+            try:
+                params = dict([p.split('=') for p in query.split('&') if '=' in p]) if query else {}
+                file_id = params.get('file_id')
+                if not file_id:
+                    self._send_json({'status': 'ERROR', 'message': 'missing file_id'}, status=400)
+                    return
+
+                with lock_nodos:
+                    entry = files_store.get('files', {}).get(file_id)
+                if not entry:
+                    self._send_json({'status': 'ERROR', 'message': 'file not found'}, status=404)
+                    return
+
+                # Reconstruir archivo leyendo los bloques en orden desde metadata
+                meta = entry.get('meta', {})
+                blocks_meta = meta.get('blocks', [])
+                total_blocks = meta.get('total_blocks', len(blocks_meta))
+                original_name = meta.get('original_filename', entry.get('original_filename') or f"{file_id}.bin")
+
+                # Preparar respuesta como flujo binario
+                try:
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/octet-stream')
+                    self.send_header('Content-Disposition', f'attachment; filename="{original_name}"')
+                    # Sin Content-Length (stream)
+                    self.end_headers()
+
+                    # Escribir cada bloque en orden
+                    for i in range(1, total_blocks + 1):
+                        try:
+                            binfo = blocks_meta[i-1]
+                            path_b = binfo.get('path')
+                            if path_b and os.path.exists(path_b):
+                                with open(path_b, 'rb') as bf:
+                                    chunk = bf.read()
+                                    self.wfile.write(chunk)
+                            else:
+                                    # Intentar pedir el bloque al nodo que lo almacena (si lo conocemos)
+                                    blk_id = binfo.get('id') or binfo.get('block_id')
+                                    stored_on = None
+                                    remote_name = None
+                                    try:
+                                        raw = blocks_store.get('blocks', {})
+                                        if blk_id and blk_id in raw:
+                                            stored_on = raw[blk_id].get('stored_on')
+                                            remote_name = raw[blk_id].get('remote_name')
+                                    except Exception:
+                                        pass
+
+                                    if stored_on and stored_on in conexiones_activas:
+                                        # pedir bloque al nodo
+                                        data_bytes = request_block_from_node(stored_on, blk_id, block_name=remote_name, timeout=8)
+                                        if data_bytes:
+                                            try:
+                                                self.wfile.write(data_bytes)
+                                                continue
+                                            except Exception as e:
+                                                print(f"[DOWNLOAD] Error escribiendo bloque recibido: {e}")
+                                    print(f"[DOWNLOAD] Bloque {i} no disponible localmente ni en nodo conectado: {path_b}")
+                        except Exception as e:
+                            print(f"[DOWNLOAD] Error leyendo bloque {i} para {file_id}: {e}")
+                    return
+                except Exception as e:
+                    print(f"[DOWNLOAD] Error sirviendo descarga de {file_id}: {e}")
+                    self._send_json({'status': 'ERROR', 'message': 'internal error'}, status=500)
+                    return
+            except Exception as e:
+                print(f"[DOWNLOAD] Error en handler: {e}")
+                self._send_json({'status': 'ERROR', 'message': 'internal error'}, status=500)
+                return
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -1027,7 +1151,26 @@ def manejar_nodo(conn, addr):
 
                 break
             else:
-                print(f"[TCP] Mensaje desconocido de {node_id_actual}: {msg}")
+                # Procesar mensajes de bloque en respuesta a requests (BLOCK_DATA)
+                if msg_type == 'BLOCK_DATA':
+                    bid = msg.get('block_id')
+                    data_b64 = msg.get('data_b64')
+                    error = msg.get('error')
+                    key = (node_id_actual, bid)
+                    with pending_lock:
+                        ent = pending_block_responses.get(key)
+                        if ent:
+                            if error:
+                                ent['error'] = error
+                                ent['event'].set()
+                            else:
+                                try:
+                                    ent['data'] = base64.b64decode(data_b64.encode('ascii')) if data_b64 else None
+                                except Exception:
+                                    ent['data'] = None
+                                ent['event'].set()
+                else:
+                    print(f"[TCP] Mensaje desconocido de {node_id_actual}: {msg}")
 
     except Exception as e:
         print(f"[TCP] Error en conexión de {node_id_actual or addr}: {e}")
@@ -1116,6 +1259,16 @@ def main():
     # Hilo para servidor HTTP (API)
     hilo_http = threading.Thread(target=start_http_server, daemon=True)
     hilo_http.start()
+
+    # Asegurar que la carpeta base para espacioCompartido exista (para compatibilidad local)
+    try:
+        import blocks_manager as _bm
+        base_dir = getattr(_bm, 'BASE_SHARE_DIR', None)
+        if base_dir:
+            os.makedirs(base_dir, exist_ok=True)
+            print(f"[MAIN] Asegurado BASE_SHARE_DIR: {base_dir}")
+    except Exception as e:
+        print(f"[MAIN] Error creando BASE_SHARE_DIR: {e}")
 
     # Hilo monitor de conexiones
     hilo_monitor = threading.Thread(target=monitor_connections, kwargs={'interval':5}, daemon=True)
