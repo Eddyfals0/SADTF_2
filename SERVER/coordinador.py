@@ -310,6 +310,131 @@ def request_block_from_node(node_id, block_id, block_name=None, timeout=6):
     return res.get('data')
 
 
+def send_pending_blocks(node_id):
+    """
+    Recorre `files_store` y envía por TCP a `node_id` los bloques asignados a ese nodo
+    que todavía no aparecen en `stored_on_list`. Actualiza `blocks_store` y persiste.
+    """
+    try:
+        with lock_nodos:
+            # snapshot de conexiones y stores
+            sock = conexiones_activas.get(node_id)
+            if not sock:
+                print(f"[PENDING] No hay conexión activa para {node_id}")
+                return 0
+
+            sent_count = 0
+            # Recorrer archivos registrados
+            for fid, fentry in list(files_store.get('files', {}).items()):
+                meta = fentry.get('meta', {}) or {}
+                blocks_meta = meta.get('blocks', []) or []
+                placements = fentry.get('placements', []) or []
+
+                for p in placements:
+                    # primary
+                    prim_id = p.get('primary_block_id')
+                    prim_node = p.get('primary_node')
+                    idx = p.get('file_block_index', 0)
+
+                    # Si este bloque está asignado a node_id y aún no se almacenó allí
+                    if prim_node == node_id and prim_id:
+                        try:
+                            blk_meta = blocks_store.get('blocks', {}).get(prim_id, {})
+                            stored_list = blk_meta.get('stored_on_list', []) or []
+                            if node_id not in stored_list:
+                                # obtener archivo fuente desde metadata (temp)
+                                src_info = None
+                                try:
+                                    if idx and 1 <= idx <= len(blocks_meta):
+                                        src_info = blocks_meta[idx-1]
+                                except Exception:
+                                    src_info = None
+
+                                if src_info and src_info.get('path') and os.path.exists(src_info.get('path')):
+                                    try:
+                                        with open(src_info.get('path'), 'rb') as bf:
+                                            data_b = bf.read()
+                                        b64 = base64.b64encode(data_b).decode('ascii')
+                                        msg = {
+                                            'type': 'STORE_BLOCK',
+                                            'file_id': fid,
+                                            'block_id': prim_id,
+                                            'block_name': src_info.get('block_name'),
+                                            'is_replica': False,
+                                            'data_b64': b64
+                                        }
+                                        sock.sendall(json.dumps(msg).encode())
+                                        # actualizar metadata
+                                        blk_meta.setdefault('stored_on_list', [])
+                                        if node_id not in blk_meta['stored_on_list']:
+                                            blk_meta['stored_on_list'].append(node_id)
+                                        blk_meta['remote_name'] = src_info.get('block_name')
+                                        blocks_store['blocks'][prim_id] = blk_meta
+                                        sent_count += 1
+                                    except Exception as e:
+                                        print(f"[PENDING] Error enviando primary {prim_id} a {node_id}: {e}")
+                                else:
+                                    # no tenemos origen local, marcar intención o esperar otra fuente
+                                    print(f"[PENDING] Origen no disponible para primary {prim_id} (file {fid})")
+                        except Exception as e:
+                            print(f"[PENDING] Error procesando primary {prim_id}: {e}")
+
+                    # replicas
+                    reps = p.get('replica_block_ids', []) or []
+                    rep_nodes = p.get('replica_nodes', []) or []
+                    for rid, rnode in zip(reps, rep_nodes):
+                        if rnode == node_id and rid:
+                            try:
+                                rblk_meta = blocks_store.get('blocks', {}).get(rid, {})
+                                stored_list = rblk_meta.get('stored_on_list', []) or []
+                                if node_id not in stored_list:
+                                    # obtener src_info desde metadata
+                                    src_info = None
+                                    try:
+                                        if idx and 1 <= idx <= len(blocks_meta):
+                                            src_info = blocks_meta[idx-1]
+                                    except Exception:
+                                        src_info = None
+
+                                    if src_info and src_info.get('path') and os.path.exists(src_info.get('path')):
+                                        try:
+                                            with open(src_info.get('path'), 'rb') as bf:
+                                                data_b = bf.read()
+                                            b64 = base64.b64encode(data_b).decode('ascii')
+                                            msg = {
+                                                'type': 'STORE_BLOCK',
+                                                'file_id': fid,
+                                                'block_id': rid,
+                                                'block_name': src_info.get('block_name'),
+                                                'is_replica': True,
+                                                'data_b64': b64
+                                            }
+                                            sock.sendall(json.dumps(msg).encode())
+                                            rblk_meta.setdefault('stored_on_list', [])
+                                            if node_id not in rblk_meta['stored_on_list']:
+                                                rblk_meta['stored_on_list'].append(node_id)
+                                            rblk_meta['remote_name'] = src_info.get('block_name')
+                                            blocks_store['blocks'][rid] = rblk_meta
+                                            sent_count += 1
+                                        except Exception as e:
+                                            print(f"[PENDING] Error enviando replica {rid} a {node_id}: {e}")
+                                    else:
+                                        print(f"[PENDING] Origen no disponible para replica {rid} (file {fid})")
+                            except Exception as e:
+                                print(f"[PENDING] Error procesando replica {rid}: {e}")
+
+            if sent_count:
+                try:
+                    save_persistent_blocks(blocks_store)
+                except Exception:
+                    pass
+            print(f"[PENDING] Enviados {sent_count} bloques pendientes a {node_id}")
+            return sent_count
+    except Exception as e:
+        print(f"[PENDING] Error general al enviar pendientes a {node_id}: {e}")
+        return 0
+
+
 def save_persistent_nodes():
     try:
         with lock_nodos:
@@ -1109,6 +1234,11 @@ def manejar_nodo(conn, addr):
                 print(f"[BROADCAST] Notificando conexión de {node_id_actual} a {len(conexiones_activas)-1} nodos")
                 _broadcast_event(evento, exclude_node=node_id_actual)
                 save_persistent_nodes()
+                # Reintentar enviar bloques pendientes asignados a este nodo
+                try:
+                    threading.Thread(target=send_pending_blocks, args=(node_id_actual,), daemon=True).start()
+                except Exception as e:
+                    print(f"[TCP] Error lanzando reintento de bloques pendientes para {node_id_actual}: {e}")
 
             elif msg_type == "GET_NODOS":
                 # Retorna la lista de todos los nodos conectados
