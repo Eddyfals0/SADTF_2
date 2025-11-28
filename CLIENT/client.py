@@ -2,6 +2,8 @@ import socket
 import json
 import threading
 import time
+import os
+import base64
 
 DISCOVERY_PORT = 5001   # Debe coincidir con el del coordinador
 LISTEN_PORT = 6000      # Puerto donde ESTE nodo escucharía (lo puedes usar después)
@@ -109,6 +111,32 @@ def escuchar_mensajes():
                 elif msg_type == "PONG":
                     # Ignorar PONGs recibidos
                     pass
+                elif msg_type == 'STORE_BLOCK':
+                    # Recibir bloque desde el coordinador y guardarlo localmente
+                    try:
+                        file_id = msg.get('file_id')
+                        block_id = msg.get('block_id')
+                        block_name = msg.get('block_name')
+                        is_replica = msg.get('is_replica', False)
+                        data_b64 = msg.get('data_b64')
+                        if data_b64 and block_name:
+                            data = base64.b64decode(data_b64.encode('ascii'))
+                            base_dir = os.path.join(os.path.expanduser('~'), 'espacioCompartido', node_id)
+                            os.makedirs(base_dir, exist_ok=True)
+                            dest_path = os.path.join(base_dir, block_name)
+                            with open(dest_path, 'wb') as bf:
+                                bf.write(data)
+                            print(f"[CLIENT] Stored block {block_name} -> {dest_path} (replica={is_replica})")
+                            # enviar ACK al coordinador
+                            try:
+                                ack = {'type': 'STORE_BLOCK_ACK', 'block_id': block_id, 'status': 'OK'}
+                                with lock_socket:
+                                    if coord_socket:
+                                        coord_socket.sendall(json.dumps(ack).encode())
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        print(f"[CLIENT] Error procesando STORE_BLOCK: {e}")
                 elif msg_type == "NODE_CONNECTED":
                     nid = msg.get("node_id")
                     ip = msg.get("ip")

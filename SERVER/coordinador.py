@@ -10,6 +10,7 @@ import node_manager
 import blocks_manager
 import files_manager
 import partitioner
+import base64
 
 # --- Configuración ---
 COORD_HOST = "0.0.0.0"   # Escucha en todas las interfaces de red
@@ -376,6 +377,62 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 print(f"[HTTP] Error devolviendo /files: {e}")
                 self._send_json({'files': {}})
+        elif path == '/storage':
+            # Devuelve estadísticas de almacenamiento global distribuido
+            try:
+                # Capacidad total (MB) y usado (bytes) calculado a partir de files_store
+                block_size = 1024 * 1024
+                with lock_nodos:
+                    # Considerar sólo nodos online como capacidad disponible en este momento
+                    total_capacity_mb = sum([info.get('capacity', 0) for nid, info in nodos_registrados.items() if info.get('status') == 'online'])
+
+                    # Calcular usado en bytes sumando tamaños de bloques por copia (primary + replicas)
+                    used_bytes = 0
+                    used_blocks = 0
+                    try:
+                        for fid, fentry in files_store.get('files', {}).items():
+                            meta = fentry.get('meta', {})
+                            blocks_meta = meta.get('blocks', [])
+                            placements = fentry.get('placements', [])
+                            for p in placements:
+                                idx = p.get('file_block_index', 0)
+                                # obtener tamaño desde metadata si existe
+                                size = None
+                                try:
+                                    if idx and 1 <= idx <= len(blocks_meta):
+                                        size = blocks_meta[idx-1].get('size', None)
+                                except Exception:
+                                    size = None
+
+                                if not size:
+                                    # fallback a 1MB
+                                    size = block_size
+
+                                # contar primary
+                                if p.get('primary_block_id'):
+                                    used_bytes += size
+                                    used_blocks += 1
+                                # contar replicas
+                                reps = p.get('replica_block_ids', []) or []
+                                used_bytes += size * len(reps)
+                                used_blocks += len(reps)
+                    except Exception as e:
+                        print(f"[STORAGE] Error calculando usado: {e}")
+
+                total_bytes = int(total_capacity_mb * block_size)
+                percent = (used_bytes / total_bytes * 100) if total_bytes > 0 else 0
+                resp = {
+                    'total_capacity_mb': total_capacity_mb,
+                    'total_bytes': total_bytes,
+                    'used_bytes': used_bytes,
+                    'used_mb': round(used_bytes / (1024*1024), 2),
+                    'used_blocks': used_blocks,
+                    'percent': round(percent, 2)
+                }
+                self._send_json(resp)
+            except Exception as e:
+                print(f"[HTTP] Error devolviendo /storage: {e}")
+                self._send_json({'total_capacity_mb': 0, 'used_bytes': 0, 'used_mb': 0, 'percent': 0})
         else:
             self._send_json({'error': 'Not found'}, status=404)
 
@@ -488,15 +545,83 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({'status': 'ERROR', 'message': 'Error interno en particionador'}, status=500)
                     return
 
-                # Aplicar las asignaciones a la tabla global de bloques y copiar ficheros
+                # Aplicar las asignaciones a la tabla global de bloques (marcar primarios/replicas)
                 try:
-                    changed = assign_and_copy_blocks(blocks_store, file_id, placements, metadata=metadata, temp_dir=temp_dir)
+                    changed = assign_blocks_to_file(blocks_store, file_id, placements)
                     if changed:
                         save_persistent_blocks(blocks_store)
                 except Exception as e:
-                    print(f"[BLOCKS] Error asignando/copiendo bloques: {e}")
-                    self._send_json({'status': 'ERROR', 'message': 'Error asignando/copiendo bloques en tabla global'}, status=500)
+                    print(f"[BLOCKS] Error asignando bloques: {e}")
+                    self._send_json({'status': 'ERROR', 'message': 'Error asignando bloques en tabla global'}, status=500)
                     return
+
+                # Enviar los bloques a los nodos correspondientes por TCP (si están conectados)
+                try:
+                    for p in placements:
+                        idx = p.get('file_block_index', 0)
+                        # obtener info del bloque en metadata (ruta temporal creada por split)
+                        try:
+                            src_info = metadata.get('blocks', [])[idx - 1]
+                        except Exception:
+                            src_info = None
+                        if not src_info:
+                            continue
+                        src_path = src_info.get('path')
+                        block_name = src_info.get('block_name')
+
+                        # Enviar primary al nodo primario si está conectado
+                        prim_node = p.get('primary_node')
+                        prim_block_id = p.get('primary_block_id')
+                        if prim_node and prim_block_id:
+                            if prim_node in conexiones_activas and src_path and os.path.exists(src_path):
+                                try:
+                                    with open(src_path, 'rb') as f:
+                                        data_b = f.read()
+                                    b64 = base64.b64encode(data_b).decode('ascii')
+                                    msg = {
+                                        'type': 'STORE_BLOCK',
+                                        'file_id': file_id,
+                                        'block_id': prim_block_id,
+                                        'block_name': block_name,
+                                        'is_replica': False,
+                                        'data_b64': b64
+                                    }
+                                    conexiones_activas[prim_node].sendall(json.dumps(msg).encode())
+                                    blocks_store['blocks'][prim_block_id]['stored_on'] = prim_node
+                                    blocks_store['blocks'][prim_block_id]['remote_name'] = block_name
+                                except Exception as e:
+                                    print(f"[BLOCKS] No se pudo enviar primary {prim_block_id} a {prim_node}: {e}")
+                            else:
+                                print(f"[BLOCKS] Nodo {prim_node} no conectado. Dejar primary {prim_block_id} pendiente.")
+
+                        # Enviar réplicas
+                        for rid, rnode in zip(p.get('replica_block_ids', []), p.get('replica_nodes', [])):
+                            if rnode and rid:
+                                if rnode in conexiones_activas and src_path and os.path.exists(src_path):
+                                    try:
+                                        with open(src_path, 'rb') as f:
+                                            data_b = f.read()
+                                        b64 = base64.b64encode(data_b).decode('ascii')
+                                        msg = {
+                                            'type': 'STORE_BLOCK',
+                                            'file_id': file_id,
+                                            'block_id': rid,
+                                            'block_name': block_name,
+                                            'is_replica': True,
+                                            'data_b64': b64
+                                        }
+                                        conexiones_activas[rnode].sendall(json.dumps(msg).encode())
+                                        blocks_store['blocks'][rid]['stored_on'] = rnode
+                                        blocks_store['blocks'][rid]['remote_name'] = block_name
+                                    except Exception as e:
+                                        print(f"[BLOCKS] No se pudo enviar replica {rid} a {rnode}: {e}")
+                                else:
+                                    print(f"[BLOCKS] Nodo {rnode} no conectado. Dejar replica {rid} pendiente.")
+
+                    # Persistir cambios de stored_on/remote_name
+                    save_persistent_blocks(blocks_store)
+                except Exception as e:
+                    print(f"[BLOCKS] Error al enviar bloques a nodos: {e}")
 
                 # Registrar metadatos del archivo en el índice persistente de archivos (incluye placements)
                 try:

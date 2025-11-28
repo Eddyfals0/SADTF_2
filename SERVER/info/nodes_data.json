@@ -1,3 +1,20 @@
 {
-  "nodos": {}
+  "nodos": {
+    "nodo1": {
+      "ip": "172.31.13.69",
+      "port": 5000,
+      "capacity": 100,
+      "status": "offline",
+      "used": 0,
+      "last_seen": 1764364615.5196004
+    },
+    "nodo2": {
+      "ip": "127.0.0.1",
+      "port": 5000,
+      "capacity": 70,
+      "status": "offline",
+      "used": 0,
+      "last_seen": 1764365000.9874413
+    }
+  }
 }

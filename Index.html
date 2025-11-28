@@ -477,6 +477,19 @@
                     console.warn('Error fetching files index:', err);
                 }
                 renderFiles();
+                // Obtener estadísticas de almacenamiento global (basado en tamaños reales de bloques)
+                try {
+                    const sres = await fetch(apiBase + '/storage');
+                    if (sres.ok) {
+                        const sjson = await sres.json();
+                        // sjson: { total_capacity_mb, used_mb, percent }
+                        const usedMB = Math.round((sjson.used_mb || 0) * 100) / 100;
+                        const totalMB = Math.round((sjson.total_capacity_mb || 0) * 100) / 100;
+                        updateStorageBar(usedMB, totalMB);
+                    }
+                } catch (err) {
+                    console.warn('Error fetching storage stats:', err);
+                }
             } catch (e) {
                 console.error('startPolling error', e);
                 const tbody = document.getElementById('nodesTableBody');
@@ -528,7 +541,6 @@
                     totalCap += node.capacity;
                     totalUsed += node.used;
                 }
-
                 const row = `
                     <tr class="hover:bg-slate-800 transition-colors border-b border-slate-700/50">
                         <td class="px-4 py-3 font-mono text-blue-300">${node.id}</td>
@@ -547,7 +559,6 @@
                 tbody.innerHTML += row;
             });
 
-            updateStorageBar(totalUsed, totalCap);
         }
 
         function updateStorageBar(used, total) {
