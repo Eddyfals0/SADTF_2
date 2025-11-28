@@ -85,6 +85,8 @@ update_blocks_for_node = blocks_manager.update_blocks_for_node
 set_node_blocks_unavailable = blocks_manager.set_node_blocks_unavailable
 set_node_blocks_available = blocks_manager.set_node_blocks_available
 raw_blocks_to_ui = blocks_manager.raw_to_ui_struct
+assign_blocks_to_file = blocks_manager.assign_blocks_to_file
+free_blocks = blocks_manager.free_blocks
 
 
 def split_file_to_blocks(file_data, dest_dir, block_size=1024*1024):
