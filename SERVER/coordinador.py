@@ -413,7 +413,21 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
             
             try:
                 # Parsear multipart (forma simple sin librerías externas)
-                boundary = content_type.split('boundary=')[1].encode()
+                # Extraer el boundary de forma robusta (puede venir sin quotes o con charset)
+                boundary_match = content_type.split('boundary=')
+                if len(boundary_match) < 2:
+                    self._send_json({'status': 'ERROR', 'message': 'No boundary found in Content-Type'}, status=400)
+                    return
+                
+                boundary_str = boundary_match[1].strip()
+                # Si viene entre comillas, removerlas
+                if boundary_str.startswith('"') and boundary_str.endswith('"'):
+                    boundary_str = boundary_str[1:-1]
+                # Si contiene caracteres adicionales (ej: ;), tomar solo hasta ese punto
+                if ';' in boundary_str:
+                    boundary_str = boundary_str.split(';')[0].strip()
+                
+                boundary = boundary_str.encode()
                 parts = body.split(b'--' + boundary)
                 
                 file_data = None

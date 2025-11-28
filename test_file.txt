@@ -1,0 +1,14 @@
+Este es un archivo de prueba para verificar que la subida de archivos funciona correctamente en el sistema SADTF.
+
+El archivo contiene texto simple que será dividido en bloques de 1MB por el coordinador.
+
+Línea 1
+Línea 2
+Línea 3
+Línea 4
+Línea 5
+Línea 6
+Línea 7
+Línea 8
+Línea 9
+Línea 10

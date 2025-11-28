@@ -648,6 +648,8 @@
 
         function handleFileUpload(input) {
             if (!canModify) { alert('No puedes subir archivos: el nodo local está OFFLINE.'); return; }
+            if (!apiBaseGlobal) { alert('Debes conectarte al coordinador primero.'); return; }
+            
             const file = input.files[0];
             if (!file) return;
 
@@ -658,11 +660,17 @@
             log(`> Enviando archivo al coordinador para dividir en bloques de 1MB...`);
 
             // Enviar al endpoint /upload en el coordinador (puerto 8000)
-            fetch('http://localhost:8000/upload', {
+            const uploadUrl = apiBaseGlobal + '/upload';
+            fetch(uploadUrl, {
                 method: 'POST',
                 body: formData
             })
-            .then(res => res.json())
+            .then(res => {
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                }
+                return res.json();
+            })
             .then(data => {
                 if (data.status === 'ok') {
                     const meta = data.meta || {};
@@ -690,13 +698,17 @@
                         });
                     }
                 } else {
-                    log(`✗ Error: ${data.mensaje || 'Error desconocido en servidor'}`);
-                    alert('Error al subir archivo: ' + (data.mensaje || 'Desconocido'));
+                    log(`✗ Error: ${data.message || 'Error desconocido en servidor'}`);
+                    alert('Error al subir archivo: ' + (data.message || 'Desconocido'));
                 }
             })
             .catch(err => {
                 log(`✗ Error de red: ${err.message}`);
                 alert('Error al subir archivo: ' + err.message);
+            })
+            .finally(() => {
+                // Limpiar input de archivo
+                input.value = '';
             });
         }
 
