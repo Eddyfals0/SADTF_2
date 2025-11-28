@@ -429,7 +429,9 @@
         // --- FUNCIONES DE INTEGRACIÓN CON API ---
         async function apiGetNodes(apiBase) {
             try {
-                const res = await fetch(apiBase + '/nodes');
+                // Pedimos todos los nodos (online y offline) para que las UIs muestren
+                // nodos marcados como offline en lugar de desaparecerlos.
+                const res = await fetch(apiBase + '/nodes?all=1');
                 if (!res.ok) throw new Error('nodes failed');
                 return await res.json();
             } catch (e) {
