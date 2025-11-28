@@ -735,12 +735,60 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                                             'data_b64': b64
                                         }
                                         conexiones_activas[rnode].sendall(json.dumps(msg).encode())
-                                        blocks_store['blocks'][rid]['stored_on'] = rnode
-                                        blocks_store['blocks'][rid]['remote_name'] = block_name
+                                        # mantener lista de nodos que almacenaron este bloque
+                                        blk = blocks_store['blocks'].get(rid, {})
+                                        blk.setdefault('stored_on_list', [])
+                                        if rnode not in blk['stored_on_list']:
+                                            blk['stored_on_list'].append(rnode)
+                                        blk['remote_name'] = block_name
+                                        blocks_store['blocks'][rid] = blk
                                     except Exception as e:
                                         print(f"[BLOCKS] No se pudo enviar replica {rid} a {rnode}: {e}")
                                 else:
                                     print(f"[BLOCKS] Nodo {rnode} no conectado. Dejar replica {rid} pendiente.")
+
+                        # Asegurar que el uploader (si existe) reciba también una copia local del bloque
+                        try:
+                            if uploader_node and uploader_node in conexiones_activas and src_path and os.path.exists(src_path):
+                                # Para este bloque, evitar doble envío si ya fue almacenado en uploader
+                                already = False
+                                # prim_node y replica nodes pueden haber sido enviados antes
+                                sent_list = []
+                                primn = p.get('primary_node')
+                                if primn:
+                                    sent_list.append(primn)
+                                sent_list.extend([n for n in (p.get('replica_nodes') or []) if n])
+                                if uploader_node in sent_list:
+                                    already = True
+
+                                if not already:
+                                    # enviar copia al uploader
+                                    try:
+                                        with open(src_path, 'rb') as f:
+                                            data_b = f.read()
+                                        b64 = base64.b64encode(data_b).decode('ascii')
+                                        msg = {
+                                            'type': 'STORE_BLOCK',
+                                            'file_id': file_id,
+                                            'block_id': prim_block_id or p.get('primary_block_id') or p.get('replica_block_ids', [None])[0],
+                                            'block_name': block_name,
+                                            'is_replica': False,
+                                            'data_b64': b64
+                                        }
+                                        conexiones_activas[uploader_node].sendall(json.dumps(msg).encode())
+                                        # registrar en stored_on_list
+                                        bid_for_meta = prim_block_id or p.get('primary_block_id') or (p.get('replica_block_ids') or [None])[0]
+                                        if bid_for_meta and bid_for_meta in blocks_store.get('blocks', {}):
+                                            blk = blocks_store['blocks'][bid_for_meta]
+                                            blk.setdefault('stored_on_list', [])
+                                            if uploader_node not in blk['stored_on_list']:
+                                                blk['stored_on_list'].append(uploader_node)
+                                            blk['remote_name'] = block_name
+                                            blocks_store['blocks'][bid_for_meta] = blk
+                                    except Exception as e:
+                                        print(f"[BLOCKS] No se pudo enviar copia al uploader {uploader_node}: {e}")
+                        except Exception:
+                            pass
 
                     # Persistir cambios de stored_on/remote_name
                     save_persistent_blocks(blocks_store)
