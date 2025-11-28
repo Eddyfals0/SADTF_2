@@ -714,14 +714,37 @@
 
         function deleteFile(index) {
             if (!canModify) { alert('No puedes modificar archivos: el nodo local está OFFLINE.'); return; }
+            if(!apiBaseGlobal) { alert('Debes conectarte al coordinador primero.'); return; }
             if(confirm("¿Eliminar archivo y liberar sus bloques en todos los nodos?")) {
-                const name = systemFiles[index].name;
-                log(`Solicitando eliminación de ${name}...`);
-                log(`> Marcando entradas de tabla de bloques como LIBRES.`);
-                log(`> Eliminando réplicas en nodos...`);
-                systemFiles.splice(index, 1);
-                renderFiles();
-                renderBlocksMap(); // Actualizar mapa visualmente
+                const file = systemFiles[index];
+                const raw = file._raw;
+                if (!raw || !raw.file_id) {
+                    alert('No se puede identificar el archivo en el servidor');
+                    return;
+                }
+                const fileId = raw.file_id;
+                log(`Solicitando eliminación de ${file.name} (id=${fileId})...`);
+                fetch(apiBaseGlobal + '/files/delete', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ file_id: fileId }) })
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    return res.json();
+                })
+                .then(j => {
+                    if (j.status === 'OK') {
+                        log(`Archivo ${file.name} eliminado correctamente`);
+                        // quitar de UI
+                        systemFiles.splice(index, 1);
+                        renderFiles();
+                        renderBlocksMap();
+                    } else {
+                        log(`Error eliminando: ${j.message || 'desconocido'}`);
+                        alert('Error eliminando archivo: ' + (j.message || 'desconocido'));
+                    }
+                })
+                .catch(err => {
+                    log(`Error eliminando archivo: ${err.message}`);
+                    alert('Error eliminando archivo: ' + err.message);
+                });
             }
         }
 

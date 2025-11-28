@@ -1,5 +1,16 @@
 import os
 import json
+import shutil
+
+# Carpeta base donde el coordinador guardará los bloques físicamente
+# Ejemplo Windows: C:\\Users\\<usuario>\\espacioCompartido
+BASE_SHARE_DIR = os.path.join(os.path.expanduser('~'), 'espacioCompartido')
+
+
+def ensure_node_dir(node_id: str):
+    path = os.path.join(BASE_SHARE_DIR, node_id)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 blocks_persistent_file = os.path.join(os.path.dirname(__file__), 'info', 'blocks_data.json')
 
@@ -141,6 +152,8 @@ def assign_blocks_to_file(blocks_data_raw, file_id: str, placements: list):
     Retorna True si al menos una asignación fue aplicada.
     """
     changed = False
+    # Nota: esta función solo marca estados en la tabla RAW. La copia física
+    # de los bloques debe realizarse en el coordinador pasando metadata adicional
     for p in placements:
         prim = p.get('primary_block_id')
         reps = p.get('replica_block_ids', [])
@@ -179,12 +192,25 @@ def free_blocks(blocks_data_raw, block_ids: list):
         try:
             if bid in blocks_data_raw.get('blocks', {}):
                 b = blocks_data_raw['blocks'][bid]
+                # Eliminar fichero físico si existe
+                try:
+                    p = b.get('path')
+                    if p and os.path.exists(p):
+                        os.remove(p)
+                except Exception:
+                    pass
+
                 b['status'] = 'free'
                 if 'primary_for' in b:
                     del b['primary_for']
                 if 'replica_for' in b:
                     try:
                         del b['replica_for']
+                    except Exception:
+                        pass
+                if 'path' in b:
+                    try:
+                        del b['path']
                     except Exception:
                         pass
                 changed = True
@@ -194,3 +220,142 @@ def free_blocks(blocks_data_raw, block_ids: list):
     if changed:
         blocks_data_raw['table_size'] = len(blocks_data_raw.get('blocks', {}))
     return changed
+
+
+def assign_and_copy_blocks(blocks_data_raw, file_id: str, placements: list, metadata: dict = None, temp_dir: str = None):
+    """
+    Asigna bloques en la tabla RAW y copia los binarios desde `metadata` (archivos en temp)
+    hacia la ruta compartida BASE_SHARE_DIR/<node_id>/. Actualiza campo 'path' en cada bloque.
+    Retorna True si hubo al menos un cambio aplicado.
+    """
+    changed = False
+    if metadata is None:
+        metadata = {}
+
+    for p in placements:
+        idx = p.get('file_block_index', 0)
+        # metadata.blocks expected list aligned by index-1
+        src_info = None
+        try:
+            src_info = metadata.get('blocks', [])[idx - 1]
+        except Exception:
+            src_info = None
+
+        primary_id = p.get('primary_block_id')
+        primary_node = p.get('primary_node')
+
+        # copy primary
+        if primary_id and primary_node and primary_id in blocks_data_raw.get('blocks', {}):
+            try:
+                block_meta = blocks_data_raw['blocks'][primary_id]
+                # ensure node dir
+                ensure_node_dir(primary_node)
+                if src_info and src_info.get('path') and os.path.exists(src_info.get('path')):
+                    src_path = src_info.get('path')
+                    dest_path = os.path.join(BASE_SHARE_DIR, primary_node, src_info.get('block_name'))
+                    try:
+                        shutil.copy2(src_path, dest_path)
+                        block_meta['path'] = dest_path
+                    except Exception as e:
+                        print(f"[BLOCKS_MANAGER] Error copiando primary {primary_id} a {dest_path}: {e}")
+                block_meta['status'] = 'occupied'
+                block_meta['primary_for'] = file_id
+                changed = True
+            except Exception:
+                pass
+
+        # copy replicas
+        reps = p.get('replica_block_ids', [])
+        rep_nodes = p.get('replica_nodes', [])
+        for rid, rnode in zip(reps, rep_nodes):
+            if rid and rnode and rid in blocks_data_raw.get('blocks', {}):
+                try:
+                    rmeta = blocks_data_raw['blocks'][rid]
+                    ensure_node_dir(rnode)
+                    if src_info and src_info.get('path') and os.path.exists(src_info.get('path')):
+                        src_path = src_info.get('path')
+                        dest_path = os.path.join(BASE_SHARE_DIR, rnode, src_info.get('block_name'))
+                        try:
+                            shutil.copy2(src_path, dest_path)
+                            rmeta['path'] = dest_path
+                        except Exception as e:
+                            print(f"[BLOCKS_MANAGER] Error copiando replica {rid} a {dest_path}: {e}")
+                    rmeta['status'] = 'replica'
+                    if 'replica_for' not in rmeta:
+                        rmeta['replica_for'] = []
+                    if file_id not in rmeta['replica_for']:
+                        rmeta['replica_for'].append(file_id)
+                    changed = True
+                except Exception:
+                    pass
+
+    # marcar tamaño tabla
+    if changed:
+        blocks_data_raw['table_size'] = len(blocks_data_raw.get('blocks', {}))
+    return changed
+
+
+def replicate_blocks_to_node(blocks_data_raw, files_data, node_id: str):
+    """
+    Cuando un nuevo nodo se conecta, intenta crear réplicas de bloques existentes
+    en `node_id` usando bloques libres del nodo. Actualiza `blocks_data_raw` y
+    `files_data` (las placements de cada archivo). Retorna número de réplicas creadas.
+    """
+    created = 0
+    # encontrar bloques libres en target node
+    free_blocks = [b for b in blocks_data_raw.get('blocks', {}).values() if b.get('node') == node_id and b.get('status') == 'free']
+    if not free_blocks:
+        return created
+
+    # recorrer cada archivo y sus placements
+    for fid, f in files_data.get('files', {}).items():
+        placements = f.get('placements', [])
+        for p in placements:
+            # si node_id ya es replica o primary, saltar
+            primary_node = p.get('primary_node')
+            replica_nodes = p.get('replica_nodes', [])
+            if node_id == primary_node or node_id in replica_nodes:
+                continue
+
+            if not free_blocks:
+                return created
+
+            # tomar un free block del nodo
+            target_block = free_blocks.pop(0)
+            tid = target_block.get('id')
+
+            # copiar desde primary path si existe
+            try:
+                primary_bid = p.get('primary_block_id')
+                primary_meta = blocks_data_raw.get('blocks', {}).get(primary_bid, {})
+                src = primary_meta.get('path')
+                if src and os.path.exists(src):
+                    ensure_node_dir(node_id)
+                    dest = os.path.join(BASE_SHARE_DIR, node_id, os.path.basename(src))
+                    try:
+                        shutil.copy2(src, dest)
+                        # actualizar tabla
+                        blocks_data_raw['blocks'][tid]['path'] = dest
+                        blocks_data_raw['blocks'][tid]['status'] = 'replica'
+                        if 'replica_for' not in blocks_data_raw['blocks'][tid]:
+                            blocks_data_raw['blocks'][tid]['replica_for'] = []
+                        blocks_data_raw['blocks'][tid]['replica_for'].append(fid)
+                        # actualizar placement en files_data
+                        if 'replica_block_ids' not in p:
+                            p['replica_block_ids'] = []
+                        if 'replica_nodes' not in p:
+                            p['replica_nodes'] = []
+                        p['replica_block_ids'].append(tid)
+                        p['replica_nodes'].append(node_id)
+                        created += 1
+                    except Exception as e:
+                        print(f"[BLOCKS_MANAGER] Error replicando a nodo {node_id}: {e}")
+                else:
+                    # si no está disponible el fichero fuente, saltar
+                    continue
+            except Exception:
+                continue
+
+    if created:
+        blocks_data_raw['table_size'] = len(blocks_data_raw.get('blocks', {}))
+    return created

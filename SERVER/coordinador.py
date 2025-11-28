@@ -87,6 +87,8 @@ set_node_blocks_available = blocks_manager.set_node_blocks_available
 raw_blocks_to_ui = blocks_manager.raw_to_ui_struct
 assign_blocks_to_file = blocks_manager.assign_blocks_to_file
 free_blocks = blocks_manager.free_blocks
+assign_and_copy_blocks = blocks_manager.assign_and_copy_blocks
+replicate_blocks_to_node = blocks_manager.replicate_blocks_to_node
 
 
 def split_file_to_blocks(file_data, dest_dir, block_size=1024*1024):
@@ -486,14 +488,14 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                     self._send_json({'status': 'ERROR', 'message': 'Error interno en particionador'}, status=500)
                     return
 
-                # Aplicar las asignaciones a la tabla global de bloques (persistir cambios)
+                # Aplicar las asignaciones a la tabla global de bloques y copiar ficheros
                 try:
-                    changed = assign_blocks_to_file(blocks_store, file_id, placements)
+                    changed = assign_and_copy_blocks(blocks_store, file_id, placements, metadata=metadata, temp_dir=temp_dir)
                     if changed:
                         save_persistent_blocks(blocks_store)
                 except Exception as e:
-                    print(f"[BLOCKS] Error asignando bloques: {e}")
-                    self._send_json({'status': 'ERROR', 'message': 'Error asignando bloques en tabla global'}, status=500)
+                    print(f"[BLOCKS] Error asignando/copiendo bloques: {e}")
+                    self._send_json({'status': 'ERROR', 'message': 'Error asignando/copiendo bloques en tabla global'}, status=500)
                     return
 
                 # Registrar metadatos del archivo en el índice persistente de archivos (incluye placements)
@@ -547,6 +549,18 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
                     set_node_blocks_available(node_id, blocks_store)
                 except Exception as e:
                     print(f"[BLOCKS] Error al actualizar bloques en /register: {e}")
+                # Intentar replicar bloques existentes hacia este nuevo nodo si hay espacio
+                try:
+                    created = replicate_blocks_to_node(blocks_store, files_store, node_id)
+                    if created:
+                        print(f"[BLOCKS] Se crearon {created} réplicas en {node_id} tras registro")
+                        try:
+                            save_persistent_blocks(blocks_store)
+                            files_manager.save_persistent_files(files_store)
+                        except Exception as e:
+                            print(f"[BLOCKS] Error guardando tras replicado: {e}")
+                except Exception as e:
+                    print(f"[BLOCKS] Error replicando bloques al registrar nodo {node_id}: {e}")
             save_persistent_nodes()
             save_persistent_blocks(blocks_store)
             print(f"[HTTP] Nodo registrado via HTTP: {node_id} -> {client_ip} cap={capacity}")
@@ -598,6 +612,45 @@ class SimpleAPIHandler(BaseHTTPRequestHandler):
         elif path == '/message':
             print(f"[HTTP] Mensaje recibido via API: {data}")
             self._send_json({'status': 'OK'})
+
+        elif path == '/files/delete':
+            # Espera JSON: { file_id: 'file_xxx' }
+            file_id = data.get('file_id')
+            if not file_id:
+                self._send_json({'status': 'ERROR', 'message': 'missing file_id'}, status=400)
+                return
+
+            try:
+                with lock_nodos:
+                    entry = files_store.get('files', {}).get(file_id)
+                    if not entry:
+                        self._send_json({'status': 'ERROR', 'message': 'file not found'}, status=404)
+                        return
+                    # recopilar block ids (primarios + réplicas)
+                    placements = entry.get('placements', [])
+                    block_ids = []
+                    for p in placements:
+                        if p.get('primary_block_id'):
+                            block_ids.append(p.get('primary_block_id'))
+                        for rid in p.get('replica_block_ids', []):
+                            block_ids.append(rid)
+
+                    # Liberar bloques (elimina ficheros físicos)
+                    freed = free_blocks(blocks_store, block_ids)
+                    if freed:
+                        save_persistent_blocks(blocks_store)
+
+                    # eliminar entrada de índice de archivos
+                    try:
+                        del files_store['files'][file_id]
+                        files_manager.save_persistent_files(files_store)
+                    except Exception as e:
+                        print(f"[FILES] Error eliminando metadatos de archivo: {e}")
+
+                self._send_json({'status': 'OK', 'file_id': file_id})
+            except Exception as e:
+                print(f"[HTTP] Error en /files/delete: {e}")
+                self._send_json({'status': 'ERROR', 'message': 'internal error'}, status=500)
 
         else:
             self._send_json({'error': 'Not found'}, status=404)
